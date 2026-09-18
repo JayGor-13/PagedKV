@@ -1,7 +1,8 @@
 # FP16 experiments on Kaggle T4
 
-Upload [notebooks/kaggle_t4.ipynb](notebooks/kaggle_t4.ipynb) to Kaggle, or copy
-the cells below. Enable **Internet** and choose **GPU T4 x2** in Notebook Settings.
+Upload [notebooks/kaggle_dual_t4_7b_8b.ipynb](notebooks/kaggle_dual_t4_7b_8b.ipynb)
+to Kaggle for the 7B/8B experiment, or copy the cells below. Enable **Internet**
+and choose **GPU T4 x2** in Notebook Settings.
 The small-model runner uses one T4. Qwen2.5-7B and Llama-3.1-8B use both T4s with
 balanced layer sharding. Do not run the H200 setup script for this workflow.
 
