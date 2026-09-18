@@ -11,6 +11,10 @@ novelty or GPU speed claim here.
 
 ## Start here
 
+**Kaggle T4 small models:** [KAGGLE_T4.md](KAGGLE_T4.md) and
+[ready-to-upload notebook](notebooks/kaggle_t4.ipynb) run shortened FP16/SDPA
+experiments with Qwen2.5-0.5B/1.5B/3B, all eight methods, and per-example resume.
+
 **Clone-to-results instructions:** [GETTING_STARTED_H200.md](GETTING_STARTED_H200.md)
 walks through cloning, installation, authentication, all tests, native GPU smoke
 tests, full execution, resume, judging and results. It also explains the runtime

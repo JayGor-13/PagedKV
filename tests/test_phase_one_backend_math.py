@@ -17,25 +17,14 @@ pytestmark = pytest.mark.skipif(transformers.__version__ != '4.45.2', reason='is
 
 @pytest.fixture
 def attention_shim(monkeypatch):
-    def flash(q, k, v, dropout_p=0., softmax_scale=None, causal=False, **kwargs):
-        if q.shape[2] != k.shape[2]:
-            k = k.repeat_interleave(q.shape[2]//k.shape[2], dim=2)
-            v = v.repeat_interleave(q.shape[2]//v.shape[2], dim=2)
-        mask = None
-        if causal:
-            mask = torch.arange(k.shape[1])[None, :] <= torch.arange(q.shape[1])[:, None] + k.shape[1]-q.shape[1]
-        return torch.nn.functional.scaled_dot_product_attention(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2),
-                                                               attn_mask=mask, scale=softmax_scale).transpose(1, 2)
+    from experiments.t4_attention import install_sdpa_bridge
     for name in ('flash_attn', 'flash_attn.bert_padding', 'flash_attn.flash_attn_interface', 'flashinfer'):
         mod = types.ModuleType(name)
         mod.__spec__ = importlib.machinery.ModuleSpec(name, loader=None)
+        mod._pagedkv_t4 = True
         monkeypatch.setitem(sys.modules, name, mod)
-    sys.modules['flash_attn'].flash_attn_func = flash
-    sys.modules['flash_attn.flash_attn_interface'].flash_attn_func = flash
-    sys.modules['flash_attn'].flash_attn_varlen_func = lambda *a, **k: (_ for _ in ()).throw(AssertionError('padding not expected'))
-    for name in ('index_first_axis', 'pad_input', 'unpad_input'):
-        setattr(sys.modules['flash_attn.bert_padding'], name, lambda *a, **k: None)
     monkeypatch.setenv('INPLACE_ROPE_OFF', '1')
+    install_sdpa_bridge()
 
 
 @pytest.mark.parametrize('architecture', ['llama', 'qwen2'])
@@ -126,3 +115,28 @@ def test_chunked_h2o_selects_same_cache_as_dense_scoring(attention_shim):
     actual = chunked_h2o(H2OKVCluster(window_size=32, max_capacity_prompt=96), k, q, v, 2)
     for a, b in zip(actual, expected):
         torch.testing.assert_close(a, b)
+
+
+@pytest.mark.parametrize('method', ['full', 'quest', 'arkvale', 'freekv', 'snapkv', 'h2o', 'rocketkv'])
+def test_portable_fp16_qwen_seven_query_groups(attention_shim, monkeypatch, method):
+    """Exercise the 14:2 GQA ratio of Qwen-0.5B through actual portable adapters."""
+    from experiments.phase_one_backends import patch_model
+    from experiments.phase_one_worker import generate
+    from experiments.freekv_protocol import settings
+    arange = torch.arange
+    def cpu_arange(*args, **kwargs):
+        if str(kwargs.get('device', '')).startswith('cuda'):
+            kwargs['device'] = 'cpu'
+        return arange(*args, **kwargs)
+    monkeypatch.setattr(torch, 'arange', cpu_arange)
+    config = transformers.Qwen2Config(vocab_size=128, hidden_size=112, intermediate_size=160,
+        num_hidden_layers=2, num_attention_heads=14, num_key_value_heads=2, max_position_embeddings=512)
+    config._attn_implementation = 'eager'
+    model = transformers.Qwen2ForCausalLM(config).half().eval()
+    cfg = dict(settings('longbenchv2', method), budget=32, sink=32, recent=32, max_new_tokens=4)
+    model, updater = patch_model(model, method, cfg)
+    def finite_output(module, inputs, output):
+        assert torch.isfinite(output).all(), 'nonfinite FP16 logits'
+    model.lm_head.register_forward_hook(finite_output)
+    result, _ = generate(model, updater, method, dict(id='half', token_ids=[i % 127 for i in range(160)]), cfg, 42, [], [])
+    assert len(result) == 4

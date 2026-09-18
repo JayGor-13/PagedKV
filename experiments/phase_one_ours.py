@@ -56,7 +56,8 @@ class PromptArchive:
     def calibrate(self):
         if self.codec is not None:
             return
-        cfg = KVTCConfig(target_cr=16, pca_rank_cap=min(1024, feature_dim(self.model)),
+        rank = self.manifest.get('codec_rank_cap', 1024) if self.manifest.get('schema') == 'kaggle-t4-shortened-v1' else 1024
+        cfg = KVTCConfig(target_cr=16, pca_rank_cap=min(rank, feature_dim(self.model)),
                          svd_method='randomized', seed=42, dp_stride=1)
         self.codec = KVTCCodec(cfg, device=next(self.model.parameters()).device)
         signature = digest([C.identity(self.manifest['model'], self.manifest['revision'], cfg,
