@@ -1,5 +1,8 @@
 # First H200 run: LongBench v2 + LongGenBench
 
+For the complete sequence starting with `git clone`, including monitoring and
+runtime estimates, use [GETTING_STARTED_H200.md](GETTING_STARTED_H200.md).
+
 This is the current run plan, superseding the earlier LongBench v1 / 7B–14B plan.
 Run these commands from the project directory on the **Linux H200 machine**.
 The local Windows checks do not establish H200 performance or multi-GPU correctness.

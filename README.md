@@ -11,6 +11,11 @@ novelty or GPU speed claim here.
 
 ## Start here
 
+**Clone-to-results instructions:** [GETTING_STARTED_H200.md](GETTING_STARTED_H200.md)
+walks through cloning, installation, authentication, all tests, native GPU smoke
+tests, full execution, resume, judging and results. It also explains the runtime
+budget and how to refine it from actual H200 measurements.
+
 **Current four-model run:** [PHASE_ONE_RUNBOOK.md](PHASE_ONE_RUNBOOK.md) contains
 the mentor's Linux terminal commands for LongBench **v2** and FreeKV's LongGenBench,
 including Qwen2.5-72B, `--gpus 5` scheduling, per-example resume, separate Qwen3-32B
