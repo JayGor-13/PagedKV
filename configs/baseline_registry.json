@@ -1,0 +1,14 @@
+{
+  "full": {"category": "exact", "status": "implemented_bridge_gpu_unvalidated", "attention": "SDPA or FlashAttention-2; FlashAttention-3 not integrated"},
+  "ours": {"category": "recoverable_compressed_cache", "status": "quality_runner_only", "note": "Qwen2/Llama, batch 1, CPU entropy codec; system benchmark unavailable"},
+  "quest": {"category": "query_aware", "status": "adapter_pending", "url": "https://github.com/mit-han-lab/Quest"},
+  "arkvale": {"category": "query_aware", "status": "implemented_bridge_gpu_unvalidated", "url": "https://github.com/pku-liang/ArkVale", "note": "Pinned upstream does not support requested Llama-3.1 RoPE or Qwen2"},
+  "rocketkv": {"category": "prefill_eviction_then_query_aware_sparse_attention", "status": "adapter_pending", "url": "https://github.com/NVlabs/RocketKV"},
+  "shadowkv": {"category": "low_rank_cpu_offload_retrieval", "status": "adapter_pending", "url": "https://github.com/ByteDance-Seed/ShadowKV"},
+  "freekv": {"category": "speculative_retrieval_correction", "status": "adapter_pending", "url": "https://github.com/sjtu-zhao-lab/FreeKV"},
+  "louiskv": {"category": "semantic_boundary_retrieval", "status": "code_source_unverified", "paper": "https://arxiv.org/abs/2510.11292"},
+  "snapkv": {"category": "prefill_compression", "status": "official_adapter_pending_local_approximation_only"},
+  "hbw_kv": {"category": "prefill_compression", "status": "code_source_unverified", "paper": "https://openreview.net/pdf?id=sQjYtFSEuZ"},
+  "h2o": {"category": "heavy_hitter_eviction", "status": "official_adapter_pending_local_approximation_only"},
+  "kivi": {"category": "kv_quantization", "status": "implemented_bridge_gpu_unvalidated", "url": "https://github.com/jy-yuan/KIVI", "note": "Llama bridge; no Qwen2 port; 2 bits is not a measured 12.5% total memory budget"}
+}

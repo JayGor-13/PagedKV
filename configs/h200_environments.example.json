@@ -1,0 +1,6 @@
+{
+  "ours": "/absolute/path/to/modern-env/bin/python",
+  "full": "/absolute/path/to/modern-env/bin/python",
+  "kivi": "/absolute/path/to/project/.envs/kivi/bin/python",
+  "arkvale": "/absolute/path/to/project/.envs/arkvale/bin/python"
+}

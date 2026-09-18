@@ -1,0 +1,4 @@
+# Task scorers from pinned KIVI / LongBench code.
+rouge==1.0.1
+fuzzywuzzy==0.18.0
+jieba==0.42.1

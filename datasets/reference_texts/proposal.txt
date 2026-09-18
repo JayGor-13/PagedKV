@@ -1,0 +1,268 @@
+
+Research proposal for KVTC based cache compression
+Temporal transforms and attention aware evaluation
+Prepared for discussion with the research mentor • 9 September 2026
+Recommendation. Keep KVTC as the base and begin with a small, controlled experiment: apply a blockwise Haar wavelet transform along the token axis of its transformed cache. Test whether this improves actual compressed size at the same answer quality. Treat attention-aware allocation as a second component that must demonstrate an independent benefit.
+This document explains the background, compares both proposed directions, specifies the first experiments and defines the evidence needed to continue. The intended resources are one RTX 4090 and a frozen language model. The target is ICLR 2027, but submission readiness depends on measured results and a defensible contribution.
+The problem statement
+A reusable document cache can be expensive to store and reload. We want to reduce the bytes needed to represent its keys and values while preserving the answers to questions that arrive later. Our hypothesis is that local correlations between token positions may remain after KVTC’s feature transform, and that a temporal transform can make its quantized representation easier to compress.
+The proposed research question is: Can a local temporal transform improve KVTC’s measured storage versus quality tradeoff, after counting all metadata and comparing against simple temporal alternatives? A second question asks whether attention-aware precision allocation improves that tradeoff beyond a reconstruction-error objective.
+What we know and what remains untested
+Established starting point
+Research hypothesis
+KVTC provides a transform, quantization and entropy coding pipeline. [1]
+Useful temporal structure may remain after its feature transform.
+Attention-aware compression and temporal compression already have prior work. [5–10]
+A specific KVTC-compatible implementation may offer a useful improvement.
+The toy examples illustrate a mathematical mechanism.
+Real models may or may not show practical storage and quality gains.
+
+Evidence status. No LLM compression benchmark results have been collected for this proposal. All numerical continuation thresholds below are proposed decision rules, not observed results, predictions or guarantees of acceptance.
+1 Background and the KVTC baseline
+What a KV cache contains
+A language model processes tokens, which are pieces of words or other text. In an attention layer, the current token produces a query. Previous tokens provide keys that the query is compared with, and values whose information is combined. Softmax converts the query–key scores into nonnegative attention weights that sum to one. The attention output is the weighted sum of the values.
+The KV cache stores previous keys and values so the model does not recompute them for every new token. A head is one attention stream; a layer contains several such streams and other operations. A channel is one numerical coordinate of a key or value. A longer prompt means more token positions and generally a larger cache.
+How KVTC compresses it
+KVTC fits a principal component analysis (PCA) basis on calibration examples, transforms cache features, allocates quantization precision and applies lossless entropy coding. PCA represents data along directions of variation. Quantization rounds coefficients to a limited set of values; entropy coding packs the resulting symbols without further numerical error. Its key handling includes pre-RoPE compression, and its policy protects initial and recent tokens. Decompression reconstructs a cache for inference. [1]
+The original configuration protects four initial tokens and 128 recent tokens. Keep the selected baseline’s policy identical across comparisons. The paper’s large feature transform can couple heads and layers; replacing it with small independent transforms is a variant that must be labelled and validated. [1]
+RoPE means rotary positional embedding: keys are rotated according to token position. Compressing pre-RoPE keys requires correct removal and restoration of those rotations. A position mismatch can look like a compression failure even when the codec itself is correct.
+Two different meanings of compression
+Operation
+What changes
+What we measure
+Feature transform
+The coordinate system used to represent a token
+Whether quantization and entropy coding become more efficient
+Temporal transform
+How nearby token positions are represented together
+Whether local differences are cheaper to store
+Quantization
+The precision of stored coefficients
+Bytes saved and numerical or answer error
+Eviction
+Which token entries remain available
+Quality after entries are removed
+
+Our initial target is compact storage and reload of reusable caches. Reconstructing a full cache before attention does not automatically reduce active decoding memory or accelerate token generation. Those would require additional implementation and separate evidence.
+2 The two ideas and the proposed method
+Idea A Preserve attention behaviour
+Ordinary reconstruction error treats numerical differences in K or V as the target. An attention-aware objective asks whether those differences change what the model reads from its context. One implementable variant freezes the model, records calibration queries and teacher attention outputs, and adjusts a codec transform or bit allocation to reduce the difference after compression.
+For example, consider two scalar values, 8 and 12, reconstructed as 10 and 10. Their mean squared reconstruction error is 4. With attention weights 0.5 and 0.5, the output stays 10. With weights 0.9 and 0.1, the true output is 8.4 but the reconstructed output is 10. The same cache error has a different attention effect. This is a toy calculation, not a result on a language model.
+This direction is implementable, but attention-aware objectives, rotations and allocation already exist. AATC and OSCAR are especially close prior work. We cannot claim that choosing directions or precision using attention is itself new. [5, 6] Learning a large transform also adds optimization and memory costs.
+Idea B Represent local temporal differences
+A Haar transform combines adjacent coefficients into a coarse component and a detail component. The coarse component captures what the pair shares; the detail captures the difference. Repeating this on coarse components gives several resolutions. If nearby positions are correlated, many detail coefficients may need fewer bits. A transform alone neither removes coefficients nor guarantees smaller files.
+Prototype pipeline: cache → existing KVTC feature transform → blockwise Haar transform across tokens → recalibrated quantization → existing entropy coder. Reverse those steps at reload, restoring the original token positions before normal attention.
+Start with values only, completed blocks of 64 or 128 tokens and one or two Haar levels. Leave incomplete blocks and the baseline’s protected regions in their existing representation. Then test keys separately and finally K and V together. Do not mix documents in a block.
+Choice
+Initial decision
+Reason
+Base codec
+KVTC with the same calibration basis and protection policy
+Isolates the temporal contribution
+Transform
+Fixed Haar; DCT and anchor delta controls
+Cheap implementation and direct comparisons
+Learning
+None in the first prototype
+Establishes whether there is a useful signal first
+Attention objective
+Evaluation first; allocation later
+Separates mechanism from added optimization
+
+Feasibility judgment. Haar is the simpler first implementation. Its practical and scientific value remains uncertain; adjacent tokens need not have similar cache entries, especially around identifiers, topic changes and positional effects.
+3 The theoretical gap we can actually test
+Why a feature transform might leave temporal structure
+PCA decorrelates retained features under its fitted covariance. That does not imply independence between the same transformed coefficient at neighbouring token positions. Temporal dependence is a separate property of the sequence and must be measured on contiguous cache samples.
+For two neighbouring, centred scalar coefficients with equal variance, the orthonormal Haar detail is their difference divided by the square root of two. Its variance equals the original variance multiplied by one minus their correlation. If correlation is high, detail variance is small. The coarse component absorbs the remaining variance: the transform redistributes energy rather than destroying it.
+This is a mechanism, not a theorem that Haar will improve KVTC. Real caches have changing means, unequal variances, discontinuities and attention-sensitive details. The entropy backend may already exploit the same redundancy. The complete codec comparison is therefore decisive.
+Why weighted PCA is only an approximation
+A small perturbation of the cache changes the attention output through a local sensitivity map, called a Jacobian. A squared output-error approximation weights perturbations using that map. The weights depend on the query, softmax probabilities and values, and can couple several token positions. They are not generally a single fixed diagonal weight for each channel.
+For values with fixed attention weights, output error is a weighted sum of value errors. For keys, error first changes query–key scores and then the softmax weights. A shared shift of all scores leaves softmax unchanged. The effect also depends on whether the affected values differ. Therefore “small K/V error” alone cannot certify small output error.
+Claims and the evidence each requires
+Candidate claim
+Required evidence
+Residual temporal structure exists
+Ordered versus shuffled comparisons after the same fitted feature transform, across documents and K/V groups
+The structure is useful for compression
+A better actual-byte tradeoff with the same entropy backend, metadata accounting and tuning budget
+Attention-aware allocation adds value
+A controlled comparison against reconstruction allocation for both the base and temporal codec
+The method is a research contribution
+A distinction from close prior work plus robust quality, ablation and systems evidence
+
+Do not use “nobody compresses the token axis” or “nobody optimizes attention error” as the problem statement. Both are contradicted by relevant literature. The open question here is a narrower empirical and methodological improvement within a KVTC-compatible storage codec.
+4 Related work and its role in this proposal
+The first four entries are the papers supplied for discussion. The remaining entries are essential checks on the novelty claim. This is a focused reading map, not an exhaustive literature review.
+Paper
+What it contributes
+How it affects our work
+KVTC [1]
+Feature transform, precision allocation and entropy coding for stored KV caches
+Base pipeline; reproduce or explicitly label implementation differences
+MoE nD [2]
+Per-layer routing among eviction and K/V precision choices using attention sensitivity
+Relevant allocation baseline; does not establish a new temporal transform
+PiKV [3]
+KV management for MoE systems, including distributed routing and compression
+Systems context; less direct for a single-GPU codec prototype
+DefensiveKV [4]
+Eviction based on risk of important information being missed by aggregate attention statistics
+Motivates unknown future questions and rare-fact stress tests
+AATC [5]
+Attention-aware distortion and bit allocation in transform coding
+Direct challenge to a broad attention-aware novelty claim
+OSCAR [6]
+Offline query- and attention-related covariance rotations for low-bit quantization
+Close comparison for learned or sensitivity-aware directions
+FreqKV [7]
+Frequency compression along the sequence dimension
+Temporal compression is established; use DCT as a matched-codec control
+CacheGen [8]
+Local delta encoding, quantization and entropy coding
+Adjacent-token redundancy is established; include anchor delta coding
+FAEDKV [9]
+Frequency-domain cache compression with attention-related selection
+High-frequency detail cannot be assumed unimportant
+MatryoshkaKV [10]
+Learned low-rank cache projections with calibration or distillation
+Learning a PCA-initialized projection is not by itself a new contribution
+
+A useful reading order is KVTC first, then AATC and OSCAR, followed by CacheGen and FreqKV. Read DefensiveKV before designing the final question-answer evaluation. PiKV is useful later if the project expands into distributed inference.
+Eviction and stored-cache coding have different operating points. Do not compare their advertised compression ratios as if they measured identical memory, latency and quality. Reproduce a common workload and account for what remains resident or must be reconstructed.
+5 Experimental setup and the first two checks
+A manageable starting configuration
+Use a frozen Qwen2.5-1.5B-Instruct model for the pilot, batch size one and 2,048- and 4,096-token contexts. [11] Start in BF16 where supported. One RTX 4090 should be a practical platform for this scale, but profile available VRAM and host RAM before scheduling larger runs. Stream cached tensors to CPU or disk and process layers or query chunks to avoid storing all attention matrices.
+Create document-level splits: initially 64 calibration documents, 32 validation documents and 64 held-out test documents, covering prose, code and numeric or structured text. These are exploratory sample counts. Fit the basis, quantizers and allocation only on calibration data; tune choices on validation data. Do not retune after inspecting held-out results.
+Audit the KVTC implementation first: feature grouping, basis rank, pre-RoPE handling, quantizer, entropy backend and protected tokens. A reduced per-head implementation is useful for debugging but must not be presented as a faithful reproduction of the full baseline. Full global basis fitting may itself be a resource bottleneck.
+E0 Verify correctness before measuring gains
+Run an unchanged-cache save/load check with identical tokens, masks, positions and logits. Verify that Haar followed by its inverse reconstructs the input coefficients in FP32, targeting relative error at most 0.00001 away from near-zero norms. For a truncated PCA basis, compare against the baseline reconstruction rather than expecting exact recovery of the original cache.
+Check pre-RoPE key round trips, padded and incomplete blocks, protected regions, and decoding of the actual packed representation. The packed decoder must match the corresponding simulated quantizer within numerical tolerance. Compression-disabled inference must not change the answer. Stop and fix any failure before interpreting quality measurements.
+E1 Measure residual temporal structure
+Capture contiguous caches and apply the fitted baseline transform. For K and V separately, measure centred lag correlations at distances 1, 2, 4 and 8, along with the fraction of energy in Haar detail bands. Inspect distributions across documents, feature groups and layers where interpretable; a single grand average can hide failures.
+Repeat after shuffling token order within each analysed block. Shuffling preserves the marginal coefficient values while removing their local order. A useful signal is consistently smaller detail energy for ordered blocks across multiple domains. Account for means so a large constant offset does not masquerade as temporal structure.
+Deliverables. A correctness log, lag-correlation plots and ordered-versus-shuffled detail-energy plots. E1 supports a mechanism; it does not establish compression savings. Proceed to the inexpensive full-codec check rather than selecting an arbitrary correlation threshold.
+6 Codec and attention experiments
+E2 Compare complete codecs at matched budgets
+Compare the base with three temporal variants: Haar, block DCT and anchor delta coding. Use the same feature basis, token protection, input caches and entropy backend. Recalibrate each representation’s quantizer fairly. Give each method the same validation tuning budget and evaluate at four useful byte budgets, including a mild and a challenging compression setting.
+Test 64- and 128-token blocks and one or two Haar levels. Begin with V only, then K only and both. Measure actual serialized bytes, including scales, offsets, headers, padding and protected raw tokens. Report the shared basis separately and show amortized totals for an explicit number of cached documents. Nominal bits per coefficient are not a storage result.
+Repeat with entropy coding disabled as a diagnostic, and include shuffled blocks for the temporal variants. If gains appear only before entropy coding, the proposed addition has not demonstrated extra storage value over the complete base. DCT within this pipeline is a control, not a reproduction of the full FreqKV method.
+E3 Test the attention effect of compression
+Replay held-out queries against original and reconstructed caches using identical causal masks and positions. Sample queries or process them in chunks rather than materializing every pair of tokens. Record cache reconstruction MSE and relative attention-output MSE. If output projection is included, include it for every method and state that choice.
+Plot attention-output error against actual bytes and against cache reconstruction error. Evaluate K-only, V-only and joint compression to identify the source of changes. A lower cache MSE with a higher attention error illustrates objective mismatch, but this is an established motivation rather than sufficient novelty.
+E4 Isolate the value of attention aware allocation
+Perturb one temporal subband at a time and measure the resulting output error. This tests whether low-energy details can nevertheless matter. If a stable mismatch appears, add sensitivity-based bit allocation while keeping the transform fixed. Start with this smaller optimization before trying to learn a full transform.
+
+Reconstruction based allocation
+Attention aware allocation
+Base KVTC representation
+Baseline A
+Baseline B
+KVTC plus Haar
+Method C
+Method D
+
+Compare C with A for the temporal effect, B with A for the allocation effect, and D with B for the temporal benefit under the stronger objective. All comparisons use matched actual bytes. Compare the allocation rule with AATC and relevant OSCAR settings where applicable. A gain only in D versus A does not identify which component caused it.
+Deliverables. Byte–error curves, component ablations, calibration cost and an explicit account of which change produces the gain. Do not start a large learned-transform experiment unless these smaller tests establish a remaining problem.
+7 Downstream quality and systems experiments
+E5 Evaluate answers to previously unknown questions
+Build the document prefix cache, compress it before the question is supplied, and restore a fresh copy for every evaluation branch. Then append the question with the correct chat template, attention mask and token positions. This represents reusable storage and avoids tuning compression using the very question used to assess it. DefensiveKV motivates testing fragility under future queries. [4]
+Use 100–200 paired question evaluations for an initial diagnostic, spanning factual retrieval, multi-fact reasoning and code or numeric identifiers. Include rare details, abrupt topic changes and questions from different positions in the document. Use objective exact-match or token-F1 scoring where appropriate and inspect a small set of failure cases.
+Compare uncompressed inference, base KVTC and selected variants on exactly the same questions. Report overall scores, not only questions the uncompressed model answered correctly. That conditional subset can be a secondary diagnostic. Multiple questions from one document are correlated; bootstrap paired differences at the document level.
+If results are promising, repeat on a second model family, preferably including a 7–8B model, and longer contexts as resources permit. Keep model precision identical within each comparison. Weight quantization, if needed for memory, is another experimental condition and must be disclosed. A small-model result alone is a pilot.
+E6 Measure the cost of the proposed benefit
+Measure encoding, decoding and end-to-end cache reload separately from prefill and token generation. Include CPU entropy coding, device transfers, synchronization and temporary buffers. Record peak allocated and reserved GPU memory, host memory and actual on-disk bytes. Use warm-up runs, then at least ten timed repetitions for initial median latency; expand repetitions before making tail-latency claims.
+For a storage or transfer workload, the useful comparison includes saved I/O time minus added codec time. A smaller file can still reload more slowly. Report the measured storage bandwidth and workload rather than claiming an unconditional speedup. Restoring a full cache does not establish a lower active attention-memory requirement.
+Metrics and their interpretation
+Metric
+What it tells us
+What it cannot establish alone
+Actual stored bytes
+Real storage requirement
+Preserved answer quality
+Reconstruction MSE
+Numerical fidelity of K/V
+Preserved attention behaviour
+Attention output MSE
+Local effect on a fixed attention computation
+End-to-end generation quality
+Paired task score and confidence interval
+Observed answer-quality tradeoff
+Generalization to every model or domain
+Reload time and peak memory
+Practical cost for the stated workload
+A speedup in a different deployment
+
+8 Results required to continue
+Adopt these as provisional practical gates with the mentor before the held-out test. They are targets for decision-making, not forecasts. A 10 percent improvement is a relative change; a one percentage point score change means, for example, 70 percent versus 69 percent accuracy.
+Gate
+Evidence supporting continuation
+If the evidence is absent
+Correctness
+All E0 checks pass; the actual packed decoder is evaluated
+Fix the implementation; no scientific interpretation yet
+Useful signal
+Ordered-block structure appears repeatedly and survives centring checks
+Deprioritize Haar unless a complete-codec gain provides another explanation
+Practical gain
+At least 10% fewer actual bytes at matched quality, or 10% less attention MSE at matched bytes, at two neighbouring operating points
+Treat as weak or inconclusive; do not choose a single favourable rate
+Answer quality
+For the selected storage comparison, the lower bound of a paired 95% confidence interval for score change versus KVTC is at least −1 percentage point
+If the interval is wide, gather more data; if clearly worse, reject that operating point
+Robustness
+Gain repeats across domains, at least three calibration seeds where affordable, and a second model family
+Limit the claim or collect replication evidence
+Operational value
+Codec median encode plus decode time is within 1.2× the base, or a measured end-to-end storage/reload benefit offsets the overhead
+Restrict the use case or redesign the codec
+
+How to interpret these thresholds
+Lower attention error at equal bytes is a reason to continue to downstream tests; it is not the final success criterion for a storage method. The main result should demonstrate a better bytes–answer-quality tradeoff. The quality gate requires a confidence interval, not merely a nonsignificant difference. A small pilot may be inconclusive even when its average looks good.
+Predeclare a separate tolerance for rare-fact or identifier failures, for example no more than a two percentage point increase, and show its uncertainty. Avoid claiming safety for a subgroup with too few examples. If tuning choices or thresholds change after test inspection, collect a fresh confirmation set.
+When to stop or change direction
+Stop the wavelet claim if gains disappear after metadata and entropy coding, if a simple DCT or delta control matches the result without another benefit, or if answer quality consistently deteriorates. If attention allocation helps equally with and without Haar, focus on the allocation result and its distinction from prior work. If neither survives fair controls, record the negative result and reconsider the direction.
+9 Execution plan and the submission decision
+What the first implementation should contain
+Keep separate modules for cache capture, baseline encoding, temporal transforms, precision allocation, serialization, attention replay and task evaluation. Every run should save a configuration, seed, model revision, code revision, document split, actual byte totals, quality metrics and timing results. A results table should remain marked “not run” until it links to a real run log.
+The first concrete milestone is one script that compares unchanged cache, base KVTC and values-only Haar on the same short document and query. Next produce the ordered-versus-shuffled plot and an actual-byte curve. Avoid kernel engineering, full-model training and many wavelet families before those checks pass.
+A conditional schedule from 9 September 2026
+Dates
+Work
+Decision or deliverable
+9–11 September
+Baseline audit, E0 and E1
+Trustworthy round trips and a residual-structure plot
+12–14 September
+E2 and E3
+Actual-byte curves and attention-error comparisons
+15–17 September
+Targeted E4 and E5 pilot
+Mentor review of gain, novelty and quality uncertainty
+18 September
+Abstract deadline
+Submit a genuine abstract only for a coherent project
+19–23 September
+Replication, E5 expansion and E6
+Confirmatory results, failure analysis and systems costs
+24–25 September
+Paper and reproducibility review
+Submission only if the claims are supported
+
+ICLR 2027’s abstract deadline is 18 September 2026 and the full-paper deadline is 25 September 2026, both at 23:59 Anywhere on Earth. The main-text limit is nine pages. Author lists must be finalized by the abstract deadline, and OpenReview profiles should be prepared now. [12]
+This is an aggressive schedule for a first implementation, especially if a faithful baseline is not already working. The GPU is not the only constraint: debugging, calibration, fair baselines and interpretation take time. If the baseline slips or evidence remains inconclusive, preserve the work for a later submission rather than presenting hoped-for results.
+What would make a credible paper
+A credible submission needs a precise distinction from prior work, a reproducible mechanism, consistent gains over the complete base and close controls, downstream quality with uncertainty, and honest systems accounting. A theorem about Haar energy or a single attractive compression number is insufficient by itself. Passing the practical gates means the direction deserves further effort; it does not guarantee ICLR acceptance.
+10 Sources and reading order
+Links below identify the sources used for this proposal. Paper-specific descriptions are summaries; experimental settings and decision thresholds are recommendations developed for this project. Literature and deadlines were checked as of 9 September 2026.
+[1] KV Cache Transform Coding for Compact Storage in LLM Inference. ICLR 2026. Read the method and implementation details first.
+[2] MoE-nD: Per-Layer Mixture-of-Experts Routing for Multi-Axis KV Cache Compression. The first supplied arXiv paper; useful for allocation and routing context.
+[3] PiKV: KV Cache Management System for MoE Architecture. The supplied version 2 paper; useful for systems context.
+[4] Taming the Fragility of KV Cache Eviction in LLM Inference. DefensiveKV. Accessible counterpart to the supplied OpenReview paper nJgS06sX3O.
+[5] KV Cache Compression Through the Lens of Transform Coding. AATC. Read before claiming novelty for an attention-aware objective.
+[6] OSCAR: Offline Spectral Covariance-Aware Rotation for 2-bit KV Cache Quantization. Close prior for sensitivity-aware rotations.
+[7] FreqKV: Key-Value Compression in Frequency Domain for Context Window Extension. Read before claiming novelty for the token axis.
+[8] CacheGen: KV Cache Compression and Streaming for Fast Large Language Model Serving. Relevant prior for local delta encoding and compressed cache transfer.
+[9] FAEDKV: Infinite-Window Fourier Transform for Unbiased KV Cache Compression. Relevant prior for frequency-domain cache compression.
+[10] MatryoshkaKV: Adaptive KV Compression via Trainable Orthogonal Projection. Relevant prior for learned cache projections.
+[11] Qwen2.5 1.5B Instruct model card. Suggested pilot model; record the exact revision used.
+[12] ICLR 2027 Author Guidelines. Official deadlines, formatting and author requirements.

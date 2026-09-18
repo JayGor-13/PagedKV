@@ -1,0 +1,49 @@
+{
+  "exp_r3_fragility.py": {
+    "sha256": "3f1f599a0487fd5d06281b4d60ec57eec228eb1f45f785c23e010a892d706887",
+    "definitions": [
+      "NAMES",
+      "build_filler_chunks",
+      "make_doc",
+      "question_for"
+    ]
+  },
+  "exp_r10_twotier.py": {
+    "sha256": "db339d536a0a7abde570f79350eaf4f010c32184f3b3f9ab986ed8a4d1b099da",
+    "definitions": [
+      "fact_span"
+    ]
+  },
+  "exp_long_twotier.py": {
+    "sha256": "46f00b1ab788896092b9e27dfee6251e92d698b034ae2f9a46a245a6c9c93a26",
+    "definitions": [
+      "STDLIB",
+      "build_long_chunks",
+      "make_long_doc",
+      "paraphrase_question",
+      "sentence_span"
+    ]
+  },
+  "exp_common.py": {
+    "sha256": "e928adca2115ba0f84f360c4945edde479b29f84057c41e23de79efd2d20a2d7",
+    "definitions": [
+      "load_corpus"
+    ]
+  },
+  "kvtc_paper.txt": {
+    "sha256": "b8ea8a0ca5a061cfa0ba27a57c9d23f32eab74eaa65e9867070e7fafdd258020",
+    "bytes": 140841
+  },
+  "proposal.txt": {
+    "sha256": "6a637de76850741372ba2dd499d09738d119fff3298ce48fa7c1695e070ea5ab",
+    "bytes": 28878
+  },
+  "arkvale_paper.txt": {
+    "sha256": "e23ebaaa0d1fe0c5b67c913cb6466281d4dda950785787a3f3a03c16f104acf0",
+    "bytes": 70789
+  },
+  "mikv_paper.txt": {
+    "sha256": "5dd0d8102b61149859013501b8508850966132b7a60d2c133fa9520d54f83770",
+    "bytes": 68654
+  }
+}

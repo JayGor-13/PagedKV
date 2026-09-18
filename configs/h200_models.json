@@ -1,0 +1,13 @@
+{
+  "models": [
+    {"id": "meta-llama/Llama-3.1-8B-Instruct", "revision": null, "architecture": "llama", "layers": 32, "kv_heads": 8, "head_dim": 128, "context_tokens": 131072, "parameter_count_approx": 8000000000},
+    {"id": "Qwen/Qwen2.5-7B-Instruct", "revision": null, "architecture": "qwen2", "layers": 28, "kv_heads": 4, "head_dim": 128, "context_tokens": 32768, "parameter_count_approx": 7610000000, "note": "Released config is 32768; 128K needs an explicit validated YaRN configuration. Current sparse adapter rejects YaRN."},
+    {"id": "Qwen/Qwen2.5-14B-Instruct", "revision": null, "architecture": "qwen2", "layers": 48, "kv_heads": 8, "head_dim": 128, "context_tokens": 32768, "parameter_count_approx": 14700000000, "note": "Released config is 32768; 128K needs an explicit validated YaRN configuration. Current sparse adapter rejects YaRN."},
+    {"id": "Qwen/Qwen2.5-72B-Instruct", "revision": null, "architecture": "qwen2", "layers": 80, "kv_heads": 8, "head_dim": 128, "context_tokens": 32768, "parameter_count_approx": 72700000000, "note": "BF16 weights require multiple H200 GPUs. Phase-one FreeKV protocol explicitly records extrapolation beyond the released 32K config; it does not enable YaRN."}
+  ],
+  "context_sweep": [16384, 32768, 65536, 131072],
+  "page_size_sweep": [16, 32, 64, 128],
+  "budget_fractions": [0.1, 0.125, 0.2],
+  "system": {"batch_size": 8, "context": 65536, "new_tokens": 128, "warmup": 1, "repeats": 5},
+  "note": "Pin model revisions before preparing data. Context includes prompt plus generated tokens. 256K exceeds all current validated configurations. No scores in the attached figure are expected results."
+}

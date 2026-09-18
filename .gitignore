@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+work/
+outputs/
+artifacts/
+*.pt
+*.safetensors
+*.zip
+datasets/downloads/
+.env
+.env.*
+external/
+.envs/

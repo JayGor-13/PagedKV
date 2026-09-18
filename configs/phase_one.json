@@ -1,0 +1,12 @@
+{
+  "models": ["meta-llama/Llama-3.1-8B-Instruct", "Qwen/Qwen2.5-7B-Instruct", "Qwen/Qwen2.5-14B-Instruct", "Qwen/Qwen2.5-72B-Instruct"],
+  "benchmarks": ["longbenchv2", "longgenbench"],
+  "methods": ["ours", "full", "h2o", "snapkv", "quest", "arkvale", "rocketkv", "freekv"],
+  "gpus": 5,
+  "gpu_memory_gib": 140,
+  "seed": 42,
+  "prompt_cap": 120000,
+  "judge_model": "Qwen/Qwen3-32B",
+  "protocol": "FreeKV accuracy README: LongBench2 zero-shot, LongGenBench Dataset_short",
+  "note": "Quality first. RocketKV is selected from the RocketKV/ShadowKV alternative. Unsupported combinations remain visible in reports. GPU smoke validation is required."
+}

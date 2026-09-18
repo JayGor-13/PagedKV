@@ -1,0 +1,9 @@
+* text=auto
+*.sh text eol=lf
+*.py text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.ini text eol=lf
+# Preserve the byte hashes recorded in experiments/reference_sources.json.
+datasets/reference_texts/* -text

@@ -1,0 +1,6 @@
+# Install a CUDA-enabled torch build separately on the H200.
+# Do NOT install requirements-cpu.txt on the GPU environment.
+transformers==5.16.1
+numpy>=2.0
+pytest>=8
+accelerate>=1.0

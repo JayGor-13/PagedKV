@@ -1,0 +1,37 @@
+{
+  "freekv": {
+    "url": "https://github.com/sjtu-zhao-lab/FreeKV.git",
+    "commit": "2c8a7d25c9f3c7c15ce15b2f84cd03f477bd7469",
+    "directory": "external/FreeKV",
+    "transformers": "4.45.2",
+    "submodules_required": false
+  },
+  "factory": {
+    "url": "https://github.com/Zefan-Cai/KVCache-Factory.git",
+    "commit": "68cd9551a63fedf362ddb0edb008badd04c24996",
+    "directory": "external/KVCache-Factory",
+    "transformers": "4.45.2",
+    "submodules_required": false
+  },
+  "rocketkv": {
+    "url": "https://github.com/NVlabs/RocketKV.git",
+    "commit": "63637c8eb4b06b5eb83cd687723b0eeb19f48f65",
+    "directory": "external/RocketKV",
+    "transformers": "4.45.2",
+    "submodules_required": false
+  },
+  "arkvale": {
+    "url": "https://github.com/pku-liang/ArkVale.git",
+    "commit": "0c3b45ebe7ecc8c81ff4bc0f9c68c04a0866de88",
+    "directory": "external/ArkVale",
+    "transformers": "4.40.0",
+    "paper": "https://proceedings.neurips.cc/paper_files/paper/2024/file/cd4b49379efac6e84186a3ffce108c37-Paper-Conference.pdf"
+  },
+  "kivi": {
+    "url": "https://github.com/jy-yuan/KIVI.git",
+    "commit": "876b4d2d08e3b1d5f70d0969c299d8c7c42ddfb6",
+    "directory": "external/KIVI",
+    "transformers": "4.43.1",
+    "paper": "https://arxiv.org/abs/2402.02750"
+  }
+}
