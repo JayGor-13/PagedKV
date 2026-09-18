@@ -7,7 +7,7 @@ PYTHON="${PYTHON:-python3}"
 "$PYTHON" -m pip install virtualenv
 for name in t4-baselines t4-ours; do
   "$PYTHON" -m virtualenv ".envs/$name"
-  ".envs/$name/bin/python" -m pip install --upgrade pip
+  ".envs/$name/bin/python" -m pip install --upgrade pip wrapt
   ".envs/$name/bin/python" -m pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cu126
 done
 .envs/t4-baselines/bin/python -m pip install transformers==4.45.2 accelerate==0.34.2 datasets==2.21.0 huggingface-hub==0.25.2 numpy==1.26.4 scipy sentencepiece einops pytest

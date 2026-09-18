@@ -167,6 +167,32 @@ accuracy is intentional. Timings exclude model loading and are not an isolated
 serving benchmark. Setup/downloads can dominate the first run; use recorded
 sample durations for an estimate rather than extrapolating the eight-token smoke.
 
+## Repair older RocketKV FP16 failures
+
+Commit `c53cd86` could produce non-finite RocketKV retrieval scores during
+LongGenBench sampling on a T4. The corrected path retains FP16 weights, caches and
+layer outputs but accumulates RocketKV retrieval dot products, softmax and selected
+values in FP32. It also records this distinction in each result.
+
+If an existing run has that failure, first download its output archive, then pull
+the latest code and run:
+
+```bash
+%%bash
+set -euo pipefail
+cd /kaggle/working/PagedKV
+git pull --ff-only
+export CUDA_VISIBLE_DEVICES=0
+.envs/t4-baselines/bin/python -u -m experiments.kaggle_t4 repair-rocket \
+  --out outputs/t4-small
+```
+
+This archives the previous RocketKV result and log for **both benchmarks** under
+`outputs/t4-small/repairs/pre-fp32-rocket/`, then recomputes only those two jobs.
+All other completed methods remain untouched. `repairs/rocket-fp32.json` records
+the reason, archived identities and repair outcomes. The action itself is
+resumable: repeat the same command if the notebook disconnects.
+
 Sources: [Qwen 0.5B](https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct),
 [Qwen 1.5B](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct),
 [Qwen 3B](https://huggingface.co/Qwen/Qwen2.5-3B-Instruct),

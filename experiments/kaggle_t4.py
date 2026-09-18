@@ -66,7 +66,8 @@ def prepare(out, cfg):
     manifests = []
     for model in cfg['models']:
         tokenizer = AutoTokenizer.from_pretrained(model, revision=revisions[model], use_fast=False)
-        calibration_ids = tokenizer.encode(training_text)[:cfg['calibration_tokens']]
+        calibration_ids = tokenizer.encode(training_text, add_special_tokens=False,
+                                           truncation=True, max_length=cfg['calibration_tokens'])
         if len(calibration_ids) != cfg['calibration_tokens']:
             raise ValueError('Insufficient calibration tokens')
         for bench, rows in raw.items():
@@ -92,6 +93,18 @@ def prepare(out, cfg):
 
 def result_path(out, manifest, method):
     return out / 'results' / manifest['model'].split('/')[-1] / manifest['benchmark'] / method / 'result.json'
+
+
+def print_failure(path):
+    state = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
+    print(f'FAILED: {path}', flush=True)
+    if state.get('error'):
+        print('Error:', state['error'], flush=True)
+    log_path = path.with_suffix('.log')
+    if log_path.exists():
+        lines = log_path.read_text(encoding='utf-8', errors='replace').splitlines()
+        print('Last worker log lines:', flush=True)
+        print('\n'.join(lines[-40:]), flush=True)
 
 
 def write_report(out, frozen):
@@ -158,7 +171,9 @@ def worker(args):
     identity = digest([frozen, method, manifest, config, packages, hardware, source_identity()])
     path = result_path(args.out, manifest, method)
     metadata = dict(profile=PROFILE, model=manifest['model'], benchmark=manifest['benchmark'], method=method,
-                    implementation=LABELS[method].replace('FlashAttention-2', 'PyTorch SDPA') + ' [T4 FP16 portable]',
+                    implementation=LABELS[method].replace('FlashAttention-2', 'PyTorch SDPA')
+                    + (' [T4 FP16 cache/weights; FP32 retrieval attention]' if method == 'rocketkv'
+                       else ' [T4 FP16 portable]'),
                     manifest_sha256=digest(manifest), smoke=manifest['smoke'], packages=packages,
                     hardware=hardware, config=config)
     state = open_checkpoint(path, identity, [e['id'] for e in manifest['examples']], metadata, resume=True)
@@ -171,6 +186,8 @@ def worker(args):
         if method != 'ours':
             from .t4_attention import install_sdpa_bridge
             install_sdpa_bridge()
+        if method == 'rocketkv':
+            os.environ['PAGEDKV_ROCKET_FP32_ATTENTION'] = '1'
         tokenizer = AutoTokenizer.from_pretrained(manifest['model'], revision=manifest['revision'], use_fast=False)
         model = AutoModelForCausalLM.from_pretrained(manifest['model'], revision=manifest['revision'],
                     torch_dtype=torch.float16, attn_implementation='sdpa' if method == 'ours' else 'eager').to('cuda:0').eval()
@@ -205,7 +222,7 @@ def worker(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=('run', 'worker', 'report'))
+    parser.add_argument('action', choices=('run', 'worker', 'report', 'repair-rocket'))
     parser.add_argument('--out', type=Path, default=Path('outputs/kaggle-t4'))
     parser.add_argument('--models', nargs='+', choices=MODELS, default=[MODELS[0]])
     parser.add_argument('--methods', nargs='+', choices=tuple(LABELS), default=list(LABELS))
@@ -231,6 +248,66 @@ def main():
             raise RuntimeError('Another launcher is using this output directory')
         if args.action == 'report':
             write_report(args.out, json.loads((args.out / 'inputs.json').read_text(encoding='utf-8')))
+            return
+        if args.action == 'repair-rocket':
+            frozen = json.loads((args.out / 'inputs.json').read_text(encoding='utf-8'))
+            if frozen.get('config', {}).get('profile') != PROFILE or 'rocketkv' not in frozen['config']['methods']:
+                raise ValueError('This is not a compatible T4 output directory containing RocketKV')
+            import torch
+            if not torch.cuda.is_available():
+                raise RuntimeError('Select a Kaggle GPU accelerator before repairing RocketKV')
+            visible = os.environ.get('CUDA_VISIBLE_DEVICES', '0').split(',')[0]
+            failure_path = args.out / 'worker_failures.json'
+            worker_failures = json.loads(failure_path.read_text(encoding='utf-8')) if failure_path.exists() else {}
+            repair_path = args.out / 'repairs' / 'rocket-fp32.json'
+            repair = json.loads(repair_path.read_text(encoding='utf-8')) if repair_path.exists() else {
+                'schema': 'kaggle-t4-rocket-fp32-repair-v1',
+                'reason': 'RocketKV FP16 retrieval scores produced non-finite LongGenBench logits on Tesla T4.',
+                'policy': 'Archive and recompute every RocketKV benchmark row; preserve all other completed methods.',
+                'archived': [], 'jobs': []}
+            failures = []
+            # Archive both old RocketKV benchmark results first so the numerical
+            # implementation stays consistent across the repaired comparison.
+            for manifest in frozen['manifests']:
+                path = result_path(args.out, manifest, 'rocketkv')
+                old = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
+                if path.exists() and 'FP32 retrieval attention' not in old.get('implementation', ''):
+                    destination = args.out / 'repairs' / 'pre-fp32-rocket' / path.relative_to(args.out)
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    if destination.exists():
+                        raise FileExistsError(f'Repair archive already exists but current result is old: {destination}')
+                    path.replace(destination)
+                    log_path, log_destination = path.with_suffix('.log'), destination.with_suffix('.log')
+                    if log_path.exists():
+                        log_path.replace(log_destination)
+                    repair['archived'].append(dict(result=str(destination.relative_to(args.out)),
+                                                   prior_status=old.get('status'),
+                                                   prior_run_identity=old.get('run_identity')))
+            atomic_json(repair_path, repair)
+            for index, manifest in enumerate(frozen['manifests']):
+                path = result_path(args.out, manifest, 'rocketkv')
+                path.parent.mkdir(parents=True, exist_ok=True)
+                executable = args.env_root.resolve() / 't4-baselines' / 'bin/python'
+                command = [str(executable), '-u', '-m', 'experiments.kaggle_t4', 'worker',
+                           '--out', str(args.out), '--manifest-index', str(index), '--method', 'rocketkv']
+                print(f'Repairing {manifest["model"]} {manifest["benchmark"]} RocketKV', flush=True)
+                with path.with_suffix('.log').open('a', encoding='utf-8') as log:
+                    result = subprocess.run(command, cwd=ROOT, env=dict(os.environ, CUDA_VISIBLE_DEVICES=visible),
+                                            stdout=log, stderr=subprocess.STDOUT)
+                key = str(path.relative_to(args.out))
+                if result.returncode:
+                    failures.append(key)
+                    worker_failures[key] = 'FP32 RocketKV repair worker failed; see result.log'
+                    print_failure(path)
+                else:
+                    worker_failures.pop(key, None)
+                repair['jobs'].append(dict(result=key, returncode=result.returncode))
+                atomic_json(failure_path, worker_failures)
+                atomic_json(repair_path, repair)
+                write_report(args.out, frozen)
+            if failures:
+                raise SystemExit(f'{len(failures)} RocketKV repair jobs failed; see the log tail above.')
+            print('RocketKV repair completed. See', args.out / 'comparison.md', flush=True)
             return
         cfg = protocol(args)
         import torch
@@ -258,6 +335,7 @@ def main():
                     failures.append(str(path))
                     # Never damage a valid checkpoint on an identity/preflight error.
                     worker_failures[str(path.relative_to(args.out))] = 'Worker failed; see result.log'
+                    print_failure(path)
                 else:
                     worker_failures.pop(str(path.relative_to(args.out)), None)
                 atomic_json(failure_path, worker_failures)

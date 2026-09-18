@@ -77,6 +77,41 @@ def rocket_bridge(model):
             return cos, sin
 
     module.RotaryEmbeddingESM = DeviceRotary
+    if os.environ.get('PAGEDKV_ROCKET_FP32_ATTENTION') == '1':
+        # The pinned RocketKV PyTorch path computes retrieval scores in the
+        # model dtype. FP16 dot products can overflow on T4 even when Q/K are
+        # finite. Keep weights, caches, and layer outputs FP16 while performing
+        # only score, softmax, and value accumulation in FP32.
+        import inspect
+        import textwrap
+        attention = importlib.import_module('inf_llm.attention')
+        rocket = importlib.import_module('inf_llm.attention.rocket')
+        source = textwrap.dedent(inspect.getsource(rocket.rocket_forward))
+        replacements = {
+            'score = torch.matmul(h_q_observe, h_k2.transpose(-1, -2)) / math.sqrt(dim_head)':
+                'score = torch.matmul(h_q_observe.float(), h_k2.transpose(-1, -2).float()) / math.sqrt(dim_head)',
+            'return torch.softmax(x / divscale, dim=dim)':
+                'return _pagedkv_fp32_softmax(x, divscale, dim)',
+            'QK_hat = Q_hat @ K_hat.transpose(-1, -2)':
+                'QK_hat = Q_hat.float() @ K_hat.transpose(-1, -2).float()',
+            'QK = Q @ _gather(K, -2, iKV).transpose(-1, -2)':
+                'QK = Q.float() @ _gather(K, -2, iKV).transpose(-1, -2).float()',
+            'o = s @ _gather(V, -2, iKV)':
+                'o = (s @ _gather(V, -2, iKV).float()).to(V.dtype)',
+        }
+        for old, new in replacements.items():
+            if source.count(old) != 1:
+                raise RuntimeError('Pinned RocketKV source changed; cannot install the audited T4 FP32 score patch')
+            source = source.replace(old, new)
+        def stable_softmax(x, divscale, dim):
+            scale = torch.as_tensor(divscale, device=x.device, dtype=torch.float32)
+            scale = torch.nan_to_num(scale, nan=1., posinf=torch.finfo(torch.float32).max,
+                                     neginf=1.).clamp_min(torch.finfo(torch.float32).tiny)
+            return torch.softmax(x.float() / scale, dim=dim)
+        rocket._pagedkv_fp32_softmax = stable_softmax
+        namespace = {}
+        exec(compile(source, str(rocket.__file__) + ':pagedkv-fp32', 'exec'), rocket.__dict__, namespace)
+        attention.ATTN_FORWRAD['rocket'] = namespace['rocket_forward']
     if model.config.model_type == 'qwen2':
         rotary = model.model.layers[0].self_attn.rotary_emb
         rotary.base = model.config.rope_theta

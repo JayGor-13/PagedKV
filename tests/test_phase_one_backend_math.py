@@ -134,6 +134,8 @@ def test_portable_fp16_qwen_seven_query_groups(attention_shim, monkeypatch, meth
     config._attn_implementation = 'eager'
     model = transformers.Qwen2ForCausalLM(config).half().eval()
     cfg = dict(settings('longbenchv2', method), budget=32, sink=32, recent=32, max_new_tokens=4)
+    if method == 'rocketkv':
+        monkeypatch.setenv('PAGEDKV_ROCKET_FP32_ATTENTION', '1')
     model, updater = patch_model(model, method, cfg)
     def finite_output(module, inputs, output):
         assert torch.isfinite(output).all(), 'nonfinite FP16 logits'
