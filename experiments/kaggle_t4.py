@@ -1,4 +1,4 @@
-"""Resumable, shortened small-model experiments on one Kaggle T4 (FP16/SDPA).
+"""Resumable FP16/SDPA experiments on one or two Kaggle T4 GPUs.
 
 Separate output schema and reports: never a reproduction of full H200 results.
 Each method runs in its own process/environment to isolate upstream patches.
@@ -9,6 +9,7 @@ import importlib.metadata
 import json
 import os
 from pathlib import Path
+import random
 import subprocess
 import sys
 import time
@@ -18,23 +19,64 @@ from .benchmark_state import ROOT, atomic_json, digest, source_identity, open_ch
 from .freekv_protocol import FREEKV, settings, format_prompt, chat_ids, score_generation
 from .phase_one_backends import LABELS, source_for
 
-MODELS = tuple(f'Qwen/Qwen2.5-{size}-Instruct' for size in ('0.5B', '1.5B', '3B'))
+MODELS = tuple(f'Qwen/Qwen2.5-{size}-Instruct' for size in ('0.5B', '1.5B', '3B', '7B')) + (
+    'meta-llama/Llama-3.1-8B-Instruct',)
 PROFILE = 'kaggle-t4-shortened-v1'
+DUAL_PROFILE = 'kaggle-t4-dual-v1'
 
 
 def protocol(args):
-    if not 1 <= args.samples <= 400 or not 512 <= args.prompt_cap <= 4096 or not 1 <= args.max_new_tokens <= 1024:
-        raise ValueError('T4 limits: 1..400 samples, 512..4096 prompt tokens, 1..1024 output tokens')
+    if not 1 <= args.samples <= 503 or not 512 <= args.prompt_cap <= 16384 or not 1 <= args.max_new_tokens <= 16000:
+        raise ValueError('T4 limits: 1..503 samples, 512..16384 prompt tokens, 1..16000 output tokens')
+    if args.gpus not in (1, 2):
+        raise ValueError('Kaggle T4 mode supports one or two GPUs')
     if len(set(args.models)) != len(args.models) or len(set(args.methods)) != len(args.methods):
         raise ValueError('Duplicate models/methods')
-    return dict(profile=PROFILE, models=args.models, methods=args.methods,
+    if any(m.endswith(('7B-Instruct', '8B-Instruct')) for m in args.models) and args.gpus != 2:
+        raise ValueError('Qwen-7B and Llama-8B require --gpus 2 in this FP16 Kaggle runner')
+    return dict(profile=DUAL_PROFILE if args.gpus == 2 else PROFILE, models=args.models, methods=args.methods,
                 benchmarks=args.benchmarks, samples=1 if args.smoke else args.samples,
+                selection='first' if args.smoke else args.selection,
                 prompt_cap=1024 if args.smoke else args.prompt_cap,
                 max_new_tokens=8 if args.smoke else args.max_new_tokens,
-                smoke=args.smoke, seed=42, dtype='float16', attention='PyTorch SDPA replacement',
+                smoke=args.smoke, seed=42, gpus=args.gpus, dtype='float16', attention='PyTorch SDPA replacement',
                 sink=64, recent=64, budget=256, page_size=32, calibration_tokens=512,
-                codec_rank=64, protocol_note='First-N subset; BOTH benchmark prompts may be truncated; '
+                codec_rank=64, protocol_note=f'{"First-N" if args.smoke or args.selection == "first" else args.selection} subset; '
+                'BOTH benchmark prompts may be truncated; '
                 'short generation; reduced KV budget and calibration; no H200 comparability')
+
+
+def select_rows(rows, count, benchmark, selection, seed=42):
+    """Choose one frozen subset shared by every method for a benchmark/model."""
+    if count >= len(rows):
+        return list(rows)
+    if selection == 'first':
+        return list(rows[:count])
+    rng = random.Random(seed)
+    indexed = list(enumerate(rows))
+    if selection == 'random':
+        return [rows[i] for i in sorted(rng.sample(range(len(rows)), count))]
+    if selection != 'stratified':
+        raise ValueError(selection)
+    fields = ('domain', 'difficulty', 'length') if benchmark == 'longbenchv2' else ('type',)
+    buckets = {}
+    for index, row in indexed:
+        key = tuple(str(row.get(field, 'missing')) for field in fields)
+        buckets.setdefault(key, []).append((index, row))
+    keys = sorted(buckets)
+    rng.shuffle(keys)
+    for bucket in buckets.values():
+        rng.shuffle(bucket)
+    chosen = []
+    while len(chosen) < count:
+        progressed = False
+        for key in keys:
+            if buckets[key] and len(chosen) < count:
+                chosen.append(buckets[key].pop())
+                progressed = True
+        if not progressed:
+            raise RuntimeError('Unable to select requested rows')
+    return [row for _, row in sorted(chosen)]
 
 
 def prepare(out, cfg):
@@ -72,7 +114,8 @@ def prepare(out, cfg):
             raise ValueError('Insufficient calibration tokens')
         for bench, rows in raw.items():
             examples = []
-            for i, row in enumerate(rows[:cfg['samples']]):
+            selected = select_rows(rows, cfg['samples'], bench, cfg['selection'], cfg['seed'])
+            for i, row in enumerate(selected):
                 # Explicit reduced-context experiment: use head/tail truncation
                 # for LongGen too; never silently claim the upstream protocol.
                 ids, stats = chat_ids(tokenizer, format_prompt(row, bench), model,
@@ -81,8 +124,9 @@ def prepare(out, cfg):
                     raise ValueError('Chat template unexpectedly exceeds reserved token overhead')
                 examples.append(dict(id=str(row.get('_id', i)), token_ids=ids,
                                      data={k: v for k, v in row.items() if k not in ('context', 'prompt')}, **stats))
-            manifests.append(dict(schema=PROFILE, model=model, revision=revisions[model], benchmark=bench,
+            manifests.append(dict(schema=cfg['profile'], model=model, revision=revisions[model], benchmark=bench,
                                   smoke=cfg['smoke'], seed=cfg['seed'], examples=examples, source_count=len(rows),
+                                  selection=cfg['selection'],
                                   source_revision=sources[bench], calibration=[calibration_ids],
                                   calibration_revision=calibration_revision, codec_rank_cap=cfg['codec_rank'],
                                   stop_ids=tokenizer('*** finished').input_ids if bench == 'longgenbench' else []))
@@ -117,7 +161,8 @@ def write_report(out, frozen):
             state = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
             rows = state.get('rows', [])
             failure = failures.get(str(path.relative_to(out)))
-            valid = (not failure and state.get('status') == 'completed' and state.get('profile') == PROFILE
+            valid = (not failure and state.get('status') == 'completed'
+                     and state.get('profile') == frozen['config'].get('profile', PROFILE)
                      and state.get('manifest_sha256') == digest(manifest)
                      and len(rows) == len(manifest['examples'])
                      and {r['id'] for r in rows} == {e['id'] for e in manifest['examples']})
@@ -160,10 +205,11 @@ def worker(args):
     manifest = frozen['manifests'][args.manifest_index]
     method = args.method
     expected_version = '5.16.1' if method == 'ours' else '4.45.2'
-    if transformers.__version__ != expected_version or cfg['profile'] != PROFILE or method not in cfg['methods']:
+    if transformers.__version__ != expected_version or cfg['profile'] not in (PROFILE, DUAL_PROFILE) or method not in cfg['methods']:
         raise ValueError('Wrong worker environment or profile/method')
-    if torch.cuda.device_count() != 1:
-        raise ValueError('T4 workers require exactly one visible CUDA device')
+    gpus = cfg.get('gpus', 1)
+    if torch.cuda.device_count() != gpus:
+        raise ValueError(f'T4 worker requires exactly {gpus} visible CUDA devices')
     from scripts.fetch_baselines import verify
     for name, info in frozen['upstream'].items():
         if verify(name) != info:
@@ -171,18 +217,18 @@ def worker(args):
     config = dict(settings(manifest['benchmark'], method), **{k: cfg[k] for k in
                   ('sink', 'recent', 'budget', 'page_size', 'max_new_tokens')})
     packages = {p: importlib.metadata.version(p) for p in ('torch', 'transformers', 'accelerate')}
-    hardware = dict(name=torch.cuda.get_device_name(0), capability=torch.cuda.get_device_capability(0),
-                    memory=torch.cuda.get_device_properties(0).total_memory)
+    hardware = [dict(name=torch.cuda.get_device_name(i), capability=torch.cuda.get_device_capability(i),
+                     memory=torch.cuda.get_device_properties(i).total_memory) for i in range(gpus)]
     identity = digest([frozen, method, manifest, config, packages, hardware, source_identity()])
     path = result_path(args.out, manifest, method)
-    metadata = dict(profile=PROFILE, model=manifest['model'], benchmark=manifest['benchmark'], method=method,
+    metadata = dict(profile=cfg['profile'], model=manifest['model'], benchmark=manifest['benchmark'], method=method,
                     implementation=LABELS[method].replace('FlashAttention-2', 'PyTorch SDPA')
                     + (' [T4 FP16 cache/weights; FP32 retrieval attention]' if method == 'rocketkv'
                        else ' [T4 FP16 portable]'),
                     manifest_sha256=digest(manifest), smoke=manifest['smoke'], packages=packages,
                     hardware=hardware, config=config)
     state = open_checkpoint(path, identity, [e['id'] for e in manifest['examples']], metadata, resume=True)
-    state['schema'] = PROFILE
+    state['schema'] = cfg['profile']
     if state['status'] == 'completed':
         print('Already completed:', path, flush=True)
         return
@@ -194,8 +240,15 @@ def worker(args):
         if method == 'rocketkv':
             os.environ['PAGEDKV_ROCKET_FP32_ATTENTION'] = '1'
         tokenizer = AutoTokenizer.from_pretrained(manifest['model'], revision=manifest['revision'], use_fast=False)
+        from .gpu_layout import model_load_kwargs, assert_gpu_only
+        memory_gib = min(int(torch.cuda.get_device_properties(i).total_memory / 2**30) for i in range(gpus)) - 1
+        load = model_load_kwargs(gpus, memory_gib)
         model = AutoModelForCausalLM.from_pretrained(manifest['model'], revision=manifest['revision'],
-                    torch_dtype=torch.float16, attn_implementation='sdpa' if method == 'ours' else 'eager').to('cuda:0').eval()
+                    torch_dtype=torch.float16, attn_implementation='sdpa' if method == 'ours' else 'eager',
+                    **load).eval()
+        if gpus == 1:
+            model.to('cuda:0')
+        assert_gpu_only(model)
         model, updater = patch_model(model, method, config)
         # Avoid allocating all vocabulary logits during prefill in old HF paths.
         model.lm_head.register_forward_pre_hook(lambda module, inputs: (inputs[0][:, -1:, :],))
@@ -209,10 +262,12 @@ def worker(args):
         for example in manifest['examples']:
             if example['id'] in done:
                 continue
-            torch.cuda.synchronize()
+            for device in range(gpus):
+                torch.cuda.synchronize(device)
             start = time.perf_counter()
             ids, extra = generate(model, updater, method, example, config, manifest['seed'], eos, manifest['stop_ids'], archive)
-            torch.cuda.synchronize()
+            for device in range(gpus):
+                torch.cuda.synchronize(device)
             elapsed = time.perf_counter() - start
             text = tokenizer.decode(ids, skip_special_tokens=True)
             append_row(path, state, dict(id=example['id'], text=text, generated_ids=ids,
@@ -233,8 +288,10 @@ def main():
     parser.add_argument('--methods', nargs='+', choices=tuple(LABELS), default=list(LABELS))
     parser.add_argument('--benchmarks', nargs='+', choices=('longbenchv2', 'longgenbench'), default=['longbenchv2', 'longgenbench'])
     parser.add_argument('--samples', type=int, default=4)
+    parser.add_argument('--selection', choices=('first', 'random', 'stratified'), default='first')
     parser.add_argument('--prompt-cap', type=int, default=2048)
     parser.add_argument('--max-new-tokens', type=int, default=128)
+    parser.add_argument('--gpus', type=int, choices=(1, 2), default=1)
     parser.add_argument('--smoke', action='store_true')
     parser.add_argument('--env-root', type=Path, default=Path('.envs'))
     parser.add_argument('--manifest-index', type=int)
@@ -256,12 +313,16 @@ def main():
             return
         if args.action == 'repair-rocket':
             frozen = json.loads((args.out / 'inputs.json').read_text(encoding='utf-8'))
-            if frozen.get('config', {}).get('profile') != PROFILE or 'rocketkv' not in frozen['config']['methods']:
+            if frozen.get('config', {}).get('profile') not in (PROFILE, DUAL_PROFILE) or 'rocketkv' not in frozen['config']['methods']:
                 raise ValueError('This is not a compatible T4 output directory containing RocketKV')
             import torch
             if not torch.cuda.is_available():
                 raise RuntimeError('Select a Kaggle GPU accelerator before repairing RocketKV')
-            visible = os.environ.get('CUDA_VISIBLE_DEVICES', '0').split(',')[0]
+            repair_gpus = frozen['config'].get('gpus', 1)
+            visible_ids = os.environ.get('CUDA_VISIBLE_DEVICES', ','.join(map(str, range(repair_gpus)))).split(',')
+            if len(visible_ids) < repair_gpus:
+                raise ValueError(f'CUDA_VISIBLE_DEVICES must expose {repair_gpus} GPUs')
+            visible = ','.join(visible_ids[:repair_gpus])
             failure_path = args.out / 'worker_failures.json'
             worker_failures = json.loads(failure_path.read_text(encoding='utf-8')) if failure_path.exists() else {}
             repair_path = args.out / 'repairs' / 'rocket-fp32.json'
@@ -316,14 +377,18 @@ def main():
             return
         cfg = protocol(args)
         import torch
-        if not torch.cuda.is_available():
-            raise RuntimeError('Select a Kaggle GPU accelerator before running')
-        print('Sequential single-GPU jobs on:', torch.cuda.get_device_name(0), flush=True)
+        if not torch.cuda.is_available() or torch.cuda.device_count() < args.gpus:
+            raise RuntimeError(f'Select a Kaggle accelerator with at least {args.gpus} GPUs')
+        print(f'Sequential {args.gpus}-GPU jobs on:',
+              ', '.join(torch.cuda.get_device_name(i) for i in range(args.gpus)), flush=True)
         frozen = prepare(args.out, cfg)
         failures = []
         failure_path = args.out / 'worker_failures.json'
         worker_failures = json.loads(failure_path.read_text(encoding='utf-8')) if failure_path.exists() else {}
-        visible = os.environ.get('CUDA_VISIBLE_DEVICES', '0').split(',')[0]
+        visible_ids = os.environ.get('CUDA_VISIBLE_DEVICES', ','.join(map(str, range(args.gpus)))).split(',')
+        if len(visible_ids) < args.gpus:
+            raise ValueError(f'CUDA_VISIBLE_DEVICES must expose {args.gpus} GPUs')
+        visible = ','.join(visible_ids[:args.gpus])
         for index, manifest in enumerate(frozen['manifests']):
             for method in cfg['methods']:
                 env_name = 't4-ours' if method == 'ours' else 't4-baselines'

@@ -1,12 +1,13 @@
-# Small-model experiments on Kaggle T4
+# FP16 experiments on Kaggle T4
 
 Upload [notebooks/kaggle_t4.ipynb](notebooks/kaggle_t4.ipynb) to Kaggle, or copy
 the cells below. Enable **Internet** and choose **GPU T4 x2** in Notebook Settings.
-The runner uses **one T4**, sequentially, leaving the second GPU free. Do not run
-the H200 setup script for this workflow.
+The small-model runner uses one T4. Qwen2.5-7B and Llama-3.1-8B use both T4s with
+balanced layer sharding. Do not run the H200 setup script for this workflow.
 
-Models: Qwen2.5 **0.5B**, **1.5B**, and **3B** Instruct. Start with 0.5B smoke,
-then 1.5B. Methods: full cache, H2O, SnapKV, Quest, ArkVale, RocketKV, FreeKV, ours.
+Models: Qwen2.5 **0.5B**, **1.5B**, **3B**, **7B** Instruct and gated
+Llama-3.1-8B-Instruct. Start with a smoke run. Methods: full cache, H2O, SnapKV,
+Quest, ArkVale, RocketKV, FreeKV, ours.
 The seven baseline adapters use the pinned upstream math with a local PyTorch
 SDPA attention replacement. Ours uses its existing SDPA adapter. Weights and KV
 use **FP16**, without quantization. No FlashAttention or FlashInfer is installed.
@@ -20,6 +21,10 @@ This is a **shortened compatibility experiment**, not the H200 benchmark:
 - Ours retains generated KV. H2O remains the Factory prefill variant.
 - LongGenBench reports completion only; no 32B judge is installed or run.
 - No H200 speed comparison or official benchmark score should use these results.
+
+The dual-T4 route is still a Kaggle portability experiment: it uses FP16 and the
+local SDPA replacement rather than the H200 BF16/FlashAttention environment.
+Large runs must pass the dual-GPU smoke matrix before their scores are used.
 
 Local CPU adapter tests validate the portable attention path, including FP16 and
 GQA. Actual Kaggle installation, T4 kernels, memory fit and pretrained model
@@ -200,3 +205,67 @@ Sources: [Qwen 0.5B](https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct),
 [Qwen 1.5B](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct),
 [Qwen 3B](https://huggingface.co/Qwen/Qwen2.5-3B-Instruct),
 [FlashAttention 2.6.3 GPU support](https://github.com/Dao-AILab/flash-attention/tree/v2.6.3#installation-and-features).
+
+## 7. Dual-T4 Qwen2.5-7B larger-scale run
+
+Select **GPU T4 x2**, then verify that both devices are visible:
+
+```python
+!nvidia-smi --query-gpu=index,name,memory.total --format=csv
+```
+
+Run the complete 7B smoke matrix first. It checks both-GPU model sharding for all
+eight methods and both benchmarks:
+
+```bash
+%%bash
+set -euo pipefail
+cd /kaggle/working/PagedKV
+git pull --ff-only
+export CUDA_VISIBLE_DEVICES=0,1
+PYTHONPATH= .envs/t4-baselines/bin/python -u -m experiments.kaggle_t4 run \
+  --gpus 2 --models Qwen/Qwen2.5-7B-Instruct --smoke \
+  --out outputs/t4-qwen7b-smoke
+```
+
+Require all 16 smoke jobs to complete. Then run a 100-example LongBench v2 study
+with an 8K prompt cap. This is the recommended Kaggle-scale statistical run:
+
+```bash
+%%bash
+set -euo pipefail
+cd /kaggle/working/PagedKV
+export CUDA_VISIBLE_DEVICES=0,1
+PYTHONPATH= .envs/t4-baselines/bin/python -u -m experiments.kaggle_t4 run \
+  --gpus 2 --models Qwen/Qwen2.5-7B-Instruct \
+  --benchmarks longbenchv2 --samples 100 --selection stratified \
+  --prompt-cap 8192 --max-new-tokens 128 \
+  --out outputs/t4-qwen7b-longbench-100
+```
+
+The subset is selected deterministically across the available domain, difficulty,
+and length groups and is frozen in `inputs.json`, so every method sees the same
+questions. Repeat the identical command to resume. A full 503-example run is supported by
+changing `--samples 100` to `--samples 503` and using a new output directory, but
+it can exceed one Kaggle session and weekly GPU quota. Archive checkpoints before
+the session ends. Do not call a 100-example, 8K-capped run the full LongBench v2
+benchmark; report the subset size and truncation policy.
+
+For a larger LongGenBench diagnostic, use a separate output directory:
+
+```bash
+%%bash
+set -euo pipefail
+cd /kaggle/working/PagedKV
+export CUDA_VISIBLE_DEVICES=0,1
+PYTHONPATH= .envs/t4-baselines/bin/python -u -m experiments.kaggle_t4 run \
+  --gpus 2 --models Qwen/Qwen2.5-7B-Instruct \
+  --benchmarks longgenbench --samples 10 --selection stratified \
+  --prompt-cap 8192 --max-new-tokens 1024 \
+  --out outputs/t4-qwen7b-longgen-10x1k
+```
+
+That remains a shortened diagnostic. Final LongGenBench numbers require 16K
+generation and the Qwen3-32B judge; use the H200 workflow for those results.
+Llama-3.1-8B uses the same `--gpus 2` commands after authenticating a Hugging Face
+account that has accepted Meta's model terms.
