@@ -166,6 +166,9 @@ The small-run accuracy describes the truncated first-N subset only. Empty judged
 accuracy is intentional. Timings exclude model loading and are not an isolated
 serving benchmark. Setup/downloads can dominate the first run; use recorded
 sample durations for an estimate rather than extrapolating the eight-token smoke.
+`elapsed_sample_seconds` is the mean across completed examples;
+`elapsed_total_seconds` is their sum. Effective output tokens/second includes
+prefill and per-example method overhead, so it is not decode-only throughput.
 
 ## Repair older RocketKV FP16 failures
 

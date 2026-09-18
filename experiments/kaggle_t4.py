@@ -123,13 +123,18 @@ def write_report(out, frozen):
                      and {r['id'] for r in rows} == {e['id'] for e in manifest['examples']})
             scored = valid and not manifest['smoke']
             field = 'accuracy' if manifest['benchmark'] == 'longbenchv2' else 'completion_rate'
+            output_tokens = sum(r['output_tokens'] for r in rows)
+            elapsed_total = sum(r['elapsed_seconds'] for r in rows)
             records.append(dict(model=manifest['model'], benchmark=manifest['benchmark'], method=method,
                 status='failed' if failure else state.get('status', 'pending') if valid or state.get('status') != 'completed' else 'invalid',
                 samples=len(rows), expected=len(manifest['examples']),
                 subset_accuracy_pct=100*sum(r[field] for r in rows)/len(rows) if scored and field == 'accuracy' else None,
-                shortened_completion_pct=100*sum(r[field] for r in rows)/len(rows) if scored and field == 'completion_rate' else None,
-                judged_accuracy=None, generated_tokens=sum(r['output_tokens'] for r in rows),
-                elapsed_sample_seconds=sum(r['elapsed_seconds'] for r in rows),
+                # FreeKV's calculate_completion_rate already returns 0..100.
+                shortened_completion_pct=sum(r[field] for r in rows)/len(rows) if scored and field == 'completion_rate' else None,
+                judged_accuracy=None, generated_tokens=output_tokens,
+                elapsed_sample_seconds=elapsed_total/len(rows) if rows else None,
+                elapsed_total_seconds=elapsed_total,
+                effective_output_tokens_per_second=output_tokens/elapsed_total if elapsed_total else None,
                 implementation=state.get('implementation', ''), error=failure or state.get('error', '')))
     atomic_json(out / 'comparison.json', dict(profile=PROFILE, config=frozen['config'], rows=records))
     with (out / 'comparison.csv').open('w', newline='', encoding='utf-8') as handle:

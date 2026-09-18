@@ -65,3 +65,19 @@ def test_t4_report_suppresses_smoke_failed_and_mismatched_results(tmp_path):
     state['manifest_sha256'] = digest(manifest)
     atomic_json(path, state)
     assert score() is None
+
+
+def test_t4_report_does_not_rescale_upstream_completion_percentage(tmp_path):
+    manifest = dict(model='Qwen/Qwen2.5-0.5B-Instruct', benchmark='longgenbench', smoke=False,
+                    examples=[dict(id='a'), dict(id='b')])
+    frozen = dict(config=dict(methods=['full'], protocol_note='Shortened experiment'), manifests=[manifest])
+    path = result_path(tmp_path, manifest, 'full')
+    atomic_json(path, dict(profile=PROFILE, status='completed', manifest_sha256=digest(manifest),
+        rows=[dict(id='a', completion_rate=25., output_tokens=10, elapsed_seconds=2.),
+              dict(id='b', completion_rate=75., output_tokens=20, elapsed_seconds=4.)]))
+    write_report(tmp_path, frozen)
+    row = json.loads((tmp_path / 'comparison.json').read_text())['rows'][0]
+    assert row['shortened_completion_pct'] == 50.
+    assert row['elapsed_sample_seconds'] == 3.
+    assert row['elapsed_total_seconds'] == 6.
+    assert row['effective_output_tokens_per_second'] == 5.
