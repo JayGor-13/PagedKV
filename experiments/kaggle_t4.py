@@ -28,6 +28,8 @@ DUAL_PROFILE = 'kaggle-t4-dual-v1'
 def protocol(args):
     if not 1 <= args.samples <= 503 or not 512 <= args.prompt_cap <= 16384 or not 1 <= args.max_new_tokens <= 16000:
         raise ValueError('T4 limits: 1..503 samples, 512..16384 prompt tokens, 1..16000 output tokens')
+    if args.context_capacity_pct is not None and not 1 <= args.context_capacity_pct <= 100:
+        raise ValueError('--context-capacity-pct must be in [1, 100]')
     if args.gpus not in (1, 2):
         raise ValueError('Kaggle T4 mode supports one or two GPUs')
     if len(set(args.models)) != len(args.models) or len(set(args.methods)) != len(args.methods):
@@ -39,11 +41,34 @@ def protocol(args):
                 selection='first' if args.smoke else args.selection,
                 prompt_cap=1024 if args.smoke else args.prompt_cap,
                 max_new_tokens=8 if args.smoke else args.max_new_tokens,
+                context_capacity_pct=None if args.smoke else args.context_capacity_pct,
                 smoke=args.smoke, seed=42, gpus=args.gpus, dtype='float16', attention='PyTorch SDPA replacement',
                 sink=64, recent=64, budget=256, page_size=32, calibration_tokens=512,
                 codec_rank=64, protocol_note=f'{"First-N" if args.smoke or args.selection == "first" else args.selection} subset; '
                 'BOTH benchmark prompts may be truncated; '
                 'short generation; reduced KV budget and calibration; no H200 comparability')
+
+
+def method_config(cfg, benchmark, method):
+    """Resolve one recorded KV budget from the frozen prompt-cap protocol."""
+    config = settings(benchmark, method)
+    config['max_new_tokens'] = cfg['max_new_tokens']
+    config['page_size'] = cfg['page_size']
+    pct = cfg.get('context_capacity_pct')
+    if pct is None:
+        config.update({k: cfg[k] for k in ('sink', 'recent', 'budget')})
+        config['context_capacity_target_tokens'] = config['sink'] + config['recent'] + config['budget']
+        config['context_capacity_pct'] = None
+        return config
+    target = round(cfg['prompt_cap'] * pct / 100)
+    available = target - config['sink'] - config['recent']
+    budget = (available // config['page_size']) * config['page_size']
+    if budget < config['page_size']:
+        raise ValueError('context capacity is too small for sink, recent, and one retrieval page')
+    config['budget'] = budget
+    config['context_capacity_target_tokens'] = config['sink'] + config['recent'] + budget
+    config['context_capacity_pct'] = pct
+    return config
 
 
 def select_rows(rows, count, benchmark, selection, seed=42):
@@ -214,8 +239,7 @@ def worker(args):
     for name, info in frozen['upstream'].items():
         if verify(name) != info:
             raise ValueError('Upstream identity changed')
-    config = dict(settings(manifest['benchmark'], method), **{k: cfg[k] for k in
-                  ('sink', 'recent', 'budget', 'page_size', 'max_new_tokens')})
+    config = method_config(cfg, manifest['benchmark'], method)
     packages = {p: importlib.metadata.version(p) for p in ('torch', 'transformers', 'accelerate')}
     hardware = [dict(name=torch.cuda.get_device_name(i), capability=torch.cuda.get_device_capability(i),
                      memory=torch.cuda.get_device_properties(i).total_memory) for i in range(gpus)]
@@ -291,6 +315,8 @@ def main():
     parser.add_argument('--selection', choices=('first', 'random', 'stratified'), default='first')
     parser.add_argument('--prompt-cap', type=int, default=2048)
     parser.add_argument('--max-new-tokens', type=int, default=128)
+    parser.add_argument('--context-capacity-pct', type=float,
+                        help='fixed retained-token target as a percentage of --prompt-cap')
     parser.add_argument('--gpus', type=int, choices=(1, 2), default=1)
     parser.add_argument('--smoke', action='store_true')
     parser.add_argument('--env-root', type=Path, default=Path('.envs'))

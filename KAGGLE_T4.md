@@ -240,14 +240,14 @@ export CUDA_VISIBLE_DEVICES=0,1
 PYTHONPATH= .envs/t4-baselines/bin/python -u -m experiments.kaggle_t4 run \
   --gpus 2 --models Qwen/Qwen2.5-7B-Instruct \
   --benchmarks longbenchv2 --samples 100 --selection stratified \
-  --prompt-cap 8192 --max-new-tokens 128 \
+  --prompt-cap 8192 --max-new-tokens 128 --context-capacity-pct 12.5 \
   --out outputs/t4-qwen7b-longbench-100
 ```
 
 The subset is selected deterministically across the available domain, difficulty,
 and length groups and is frozen in `inputs.json`, so every method sees the same
 questions. Repeat the identical command to resume. A full 503-example run is supported by
-changing `--samples 100` to `--samples 503` and using a new output directory, but
+changing `--samples 100` to `--samples 503`, using `--prompt-cap 16384`, and using a new output directory, but
 it can exceed one Kaggle session and weekly GPU quota. Archive checkpoints before
 the session ends. Do not call a 100-example, 8K-capped run the full LongBench v2
 benchmark; report the subset size and truncation policy.

@@ -5,7 +5,7 @@ import pytest
 import torch
 
 from experiments.t4_attention import sdpa_attention
-from experiments.kaggle_t4 import PROFILE, protocol, select_rows, write_report, result_path
+from experiments.kaggle_t4 import PROFILE, method_config, protocol, select_rows, write_report, result_path
 from experiments.benchmark_state import atomic_json, digest
 
 
@@ -35,7 +35,8 @@ def test_t4_rejects_unsupported_attention_options():
 
 def test_t4_profile_limits_and_smoke():
     args = Namespace(samples=4, prompt_cap=2048, max_new_tokens=128, smoke=True,
-                     gpus=1, selection='stratified', models=['Qwen/Qwen2.5-0.5B-Instruct'],
+                     gpus=1, selection='stratified', context_capacity_pct=None,
+                     models=['Qwen/Qwen2.5-0.5B-Instruct'],
                      methods=['ours', 'full'], benchmarks=['longbenchv2'])
     cfg = protocol(args)
     assert cfg['samples'] == 1 and cfg['max_new_tokens'] == 8 and cfg['codec_rank'] == 64
@@ -45,13 +46,24 @@ def test_t4_profile_limits_and_smoke():
 
 
 def test_t4_large_models_require_dual_gpu_profile():
-    args = Namespace(samples=100, prompt_cap=4096, max_new_tokens=128, smoke=False, gpus=1, selection='stratified',
+    args = Namespace(samples=100, prompt_cap=4096, max_new_tokens=128, smoke=False, gpus=1,
+                     selection='stratified', context_capacity_pct=12.5,
                      models=['Qwen/Qwen2.5-7B-Instruct'], methods=['full'], benchmarks=['longbenchv2'])
     with pytest.raises(ValueError, match='require --gpus 2'):
         protocol(args)
     args.gpus = 2
     cfg = protocol(args)
     assert cfg['profile'] == 'kaggle-t4-dual-v1' and cfg['gpus'] == 2 and cfg['samples'] == 100
+
+
+def test_t4_twelve_point_five_percent_capacity_matches_benchmark_budget():
+    cfg = dict(prompt_cap=16384, max_new_tokens=128, page_size=32,
+               sink=64, recent=64, budget=256, context_capacity_pct=12.5)
+    longbench = method_config(cfg, 'longbenchv2', 'quest')
+    longgen = method_config(cfg, 'longgenbench', 'quest')
+    for resolved in (longbench, longgen):
+        assert resolved['context_capacity_target_tokens'] == 2048
+        assert resolved['sink'] + resolved['recent'] + resolved['budget'] == 2048
 
 
 def test_t4_stratified_selection_is_stable_and_covers_groups():
