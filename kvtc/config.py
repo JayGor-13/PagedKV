@@ -72,12 +72,12 @@ class KVTCConfig:
     self-consistent. If the scale were global across tokens, this cost would
     amortize to ~0 and achievable CR would be slightly higher."""
 
-    dp_stride: int = 1
+    dp_stride: int = 16
     """Block END positions are restricted to multiples of this.
 
-    Default 1 searches every boundary. Larger strides can reduce calibration
-    work but restrict the candidate blocks and may worsen the optimum. Rank
-    must be divisible by the stride. Measure this tradeoff before using 16."""
+    Default 16 restricts the search to aligned boundaries. The measured model
+    assignments were unchanged while calibration time fell sharply. Rank must
+    be divisible by the stride; tiny diagnostic configurations can request 1."""
 
     dp_calib_subsample: int = 4096
     """Token positions sampled from the calibration set to estimate per-block

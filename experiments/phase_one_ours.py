@@ -60,7 +60,7 @@ class PromptArchive:
         # dual-T4 profile, which deliberately uses a smaller calibration rank.
         rank = self.manifest.get('codec_rank_cap', 1024)
         cfg = KVTCConfig(target_cr=16, pca_rank_cap=min(rank, feature_dim(self.model)),
-                         svd_method='randomized', seed=42, dp_stride=1)
+                         svd_method='randomized', seed=42, dp_stride=16)
         self.codec = KVTCCodec(cfg, device=next(self.model.parameters()).device)
         signature = digest([C.identity(self.manifest['model'], self.manifest['revision'], cfg,
                                       self.manifest['calibration']), source_identity()])
@@ -103,17 +103,21 @@ class PromptArchive:
         hot_layers = A.slice_layers(layers, hot_ids)
         k, v = A.to_features(self.model, layers)
         del layers
-        archive = ColdStore.encode(self.codec, k, v, settings['page_size'])
+        selector_rank = self.manifest.get('selector_rank', 256)
+        archive = ColdStore.encode(self.codec, k, v, settings['page_size'],
+                                   key_head_rank=selector_rank)
         del k, v
-        coefficients, _ = scan_key_coefficients(archive, 256)
+        coefficients, scan_stats = scan_key_coefficients(archive, selector_rank)
         prepass, qs = A.question_forward(self.model, hot_layers, n, query, collect_queries=True)
         del prepass
         scores = page_mass_scores(self.model, self.codec, coefficients, n, qs, settings['page_size'],
-                                  256, hot_mask, device, (0, self.model.config.num_hidden_layers))
+                                  selector_rank, hot_mask, device, (0, self.model.config.num_hidden_layers))
         pages = scores.argsort(descending=True)[:settings['budget']//settings['page_size']].tolist()
         active = A.recover(self.model, archive, pages, hot_layers, hot_ids)
         result, _ = A.question_forward(self.model, active.layers, n, query)
         return result, dict(prompt_archive_used=True, retained_prompt_tokens=len(active.positions),
                             archive_bytes=archive.nbytes(), selected_pages=pages,
+                            selected_payload_bytes=active.payload_bytes_read,
+                            archive_format_version=archive.format_version, **scan_stats,
                             generated_cache_policy='retain_all_generated_kv',
                             note='One query scan of compressed prompt; hot/page overlap means token budgets are not byte matched.')

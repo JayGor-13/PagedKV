@@ -18,7 +18,7 @@ from scripts.storage_overhead import payload_parts
 def make_sample(seed=20260915, length=1024):
     rng = torch.Generator().manual_seed(seed)
     cfg = KVTCConfig(target_cr=4, pca_rank_cap=16, block_sizes=(4, 16),
-                     sink_tokens=4, window_tokens=128, dp_calib_subsample=0)
+                     sink_tokens=4, window_tokens=128, dp_stride=1, dp_calib_subsample=0)
     codec = KVTCCodec(cfg, device='cpu')
     # Independent calibration and held-out K/V tensors; no claim about their
     # realism or reconstruction quality as model activations.
@@ -176,10 +176,10 @@ def main():
         lines.append(f"| {r['seed']} / {r['tokens']} | {r['page_tokens']} | {r['monolithic_bytes']} | {r['compact_paged_bytes']} | {r['compact_overhead_percent']:.2f}% | {list(r['isolated_vs_same_archive_full_exact'].values())} | {list(r['paged_vs_independently_encoded_monolithic_exact'].values())} |")
     lines += ['', 'The isolated/full comparison requires exact tensor equality (zero tolerance) for EVERY page, for both K and V. The independently encoded monolithic comparison separately records exact equality and maximum absolute differences; it requires numerical agreement at rtol=1e-5, atol=1e-6 because matrix multiplication batch shapes can change floating-point rounding. Finite samples do not prove bitwise equality across devices or all inputs.', '',
               f"Quantized codes, widths, FP16 scales and shifts match the independently encoded monolithic cache exactly in all six cases: {all(all(r['quantized_codes_widths_scales_shifts_vs_monolithic_exact'].values()) for r in rows)}. The largest reconstructed-value discrepancy is {max(max(r['paged_vs_monolithic_max_abs_error'].values()) for r in rows):.9g}. Identical stored quantization data localizes these differences to floating-point reconstruction rather than changed quantization decisions.", '',
-              f"For the 1,024-token / 128-token-page sample, old-format JSON headers range from {primary['legacy_json_bytes_per_cache_page_min']} to {primary['legacy_json_bytes_per_cache_page_max']} bytes per K or V page, totaling {primary['legacy_json_bytes_all_pages']} bytes. Header size depends on rank and block assignments; 4.5 KB is not a fixed per-page header size. The compact format stores shared compressed metadata once plus 25 bytes per page and 8-byte offsets with a final sentinel.", '',
+              f"For the 1,024-token / 128-token-page sample, old-format JSON headers range from {primary['legacy_json_bytes_per_cache_page_min']} to {primary['legacy_json_bytes_per_cache_page_max']} bytes per K or V page, totaling {primary['legacy_json_bytes_all_pages']} bytes. Header size depends on rank and block assignments; 4.5 KB is not a fixed per-page header size. Compact v3 stores shared compressed metadata once plus 29 bytes per page and 8-byte offsets with a final sentinel.", '',
               f"In that sample, splitting entropy streams adds {primary['independently_compressed_stream_extra_bytes']} bytes versus monolithic entropy streams; container differences add {primary['container_extra_bytes']} bytes. The signed components sum to the total overhead. This measures fragmentation separately from metadata.", '',
               'The earlier 37.03% example used a 16-token recent window, not 128. Its protected-token policy was still global: the measured overhead was dominated by repeated headers, not repeated raw windows. The current random audit explicitly covers a 128-token window and partial final pages.', '',
-              'All reported archive sizes include headers and indices, but exclude shared calibration, Python objects, temporary buffers and any future hot cache. No codec changes were needed for these controls.', '',
+              'All reported archive sizes include headers and indices, but exclude shared calibration, Python objects, temporary buffers and any future hot cache. Compact v3 partitions key-code symbols into head and tail streams without duplicating coefficients.', '',
               'Run `python -m scripts.audit_page_controls`; raw results are in `outputs/page_controls.json`.', '']
     report = Path('reports/page_controls.md')
     report.parent.mkdir(parents=True, exist_ok=True)

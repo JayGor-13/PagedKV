@@ -162,7 +162,7 @@ Conceptually, the DP solves:
 
 It estimates errors from calibration coefficients, optionally subsampled. It optimizes reconstruction error, not question-answering accuracy or attention-output error. The chosen block assignments are reused during compression.
 
-The core config defaults to `dp_stride=1`, searching every boundary. The model runner defaults to `--dp-stride 16` to restrict calibration work. That restriction can change the solution; rank must be divisible by the stride.
+The core config and model runner default to `dp_stride=16`, restricting block boundaries to 16-coordinate increments. In the measured production calibration this returned the same assignment as stride 1 while reducing the reported p=7168 solve from 499.5 seconds to 8.5 seconds. This remains a restricted search, so new model/configuration combinations should compare assignments once; rank must be divisible by the stride. Tiny diagnostic configurations explicitly use stride 1.
 
 The target ratio is a bit-allocation target before entropy coding. It is not a promise of that ratio for the complete serialized archive, protected tokens, hot cache and shared basis.
 
@@ -214,14 +214,14 @@ Source: [cold_store.py](kvtc/cold_store.py), particularly `ColdStore.encode` and
 
 ## 7. Archive format and random access
 
-The default compact v2 archive contains:
+The default compact v3 archive contains:
 
 1. A fixed prefix identifying the format and sizes.
 2. One compressed shared metadata record: sequence length, feature dimension, page size, global protection and quantization layout.
 3. An array of 64-bit page offsets, including an end offset.
 4. Independently compressed page payloads.
 
-Each page has a 25-byte binary prefix with flags and six stream lengths: key codes, key scale/shift metadata, key protected rows, and the corresponding three value streams. Empty streams are omitted. Token ranges are inferred from page IDs and page size.
+Each page has a 29-byte binary prefix with flags and seven stream lengths: leading key codes, tail key codes, key scale/shift metadata, key protected rows, and the three value streams. Empty streams are omitted. Token ranges are inferred from page IDs and page size. The leading stream contains the first 256 PCA coordinates by default; `key_head_rank` can choose another split. Head and tail partition the original symbols without duplicating coefficients or scale/shift metadata.
 
 PCA tensors are supplied through the shared calibration artifact, not repeated in page payloads. The caller must supply the matching artifact when reopening an archive. Feature dimension is checked, but artifact identity is not cryptographically validated.
 
@@ -237,7 +237,7 @@ reopened = ColdStore(archive.blob, codec)
 
 `decode_pages` validates, deduplicates and sorts IDs, then jumps to the indexed payloads. It does not decode pages 0–4 to reach page 5. It returns reconstructed K/V, original positions, page IDs and selected payload bytes read; shared index bytes are accounted separately.
 
-The decoder reconstructs temporary legacy headers in memory to reuse the base codec. These headers are not stored repeatedly in v2. The earlier v1 archive remains supported.
+The selector reads only the leading key-code stream, key metadata and protected rows. It records both the bytes read and tail bytes skipped. Full selected-page reconstruction joins the head and tail codes before invoking the unchanged numerical decoder, then reads values for those pages. The decoder reconstructs temporary legacy headers in memory to reuse the base codec. These headers are not stored repeatedly. The earlier v1 and v2 archives remain supported.
 
 The required numerical control is:
 

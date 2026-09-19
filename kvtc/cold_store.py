@@ -9,6 +9,7 @@ import operator
 import struct
 import zlib
 
+import numpy as np
 import torch
 
 from .codec import KVTCCodec
@@ -18,7 +19,8 @@ from . import serialize as ser
 _PREFIX = struct.Struct('<4sBQQ')  # magic, version, stored metadata length, page count
 _ENTRY = struct.Struct('<QQQQQ')  # start, end, offset, key bytes, value bytes
 _OFFSET = struct.Struct('<Q')
-_PAGE = struct.Struct('<B6I')  # protected dtypes, six compressed stream lengths
+_PAGE = struct.Struct('<B6I')  # v2: protected dtypes, K/V codes, metadata, protected
+_PAGE_SPLIT = struct.Struct('<B7I')  # v3: K head/tail codes, K metadata/protected, V streams
 
 
 def _protection(length, start, end, sink_tokens, window_tokens):
@@ -71,7 +73,7 @@ class ColdStore:
         if len(blob) < _PREFIX.size:
             raise ValueError('truncated cold archive')
         magic, version, meta_len, count = _PREFIX.unpack_from(blob)
-        if magic != b'KVPG' or version not in (1, 2):
+        if magic != b'KVPG' or version not in (1, 2, 3):
             raise ValueError('unsupported cold archive')
         self.format_version = version
         table_bytes = count * _ENTRY.size if version == 1 else (count + 1) * _OFFSET.size
@@ -99,7 +101,9 @@ class ColdStore:
         next_pos, next_offset = 0, self.index_bytes
         for start, end, offset, nk, nv in self._entries:
             if (start != next_pos or end <= start or offset != next_offset or nk <= 0
-                    or (version == 1 and nv <= 0) or (version == 2 and nk < _PAGE.size)):
+                    or (version == 1 and nv <= 0)
+                    or (version == 2 and nk < _PAGE.size)
+                    or (version == 3 and nk < _PAGE_SPLIT.size)):
                 raise ValueError('invalid cold archive index')
             next_pos, next_offset = end, offset + nk + nv
         if next_pos != self.metadata['seq_len'] or next_offset != len(blob):
@@ -110,23 +114,28 @@ class ColdStore:
         self._codec = KVTCCodec(replace(codec.cfg, entropy_codec=self.metadata['entropy_codec']),
                                 device=codec.device)
         self._codec.art = replace(codec.art)
-        # Zero-length streams are implicit in v2. Generate their valid empty
+        # Zero-length streams are implicit in compact formats. Generate their valid empty
         # representation once for the unchanged legacy deserializer.
         self._empty_stream = (ser._compress(b'', self.metadata['entropy_codec'], 6)
-                              if version == 2 else b'')
+                              if version in (2, 3) else b'')
 
     @classmethod
-    def encode(cls, codec, keys, values, page_tokens=128, format_version=2):
-        """Encode using compact v2 by default; v1 is retained for comparisons.
+    def encode(cls, codec, keys, values, page_tokens=128, format_version=3, key_head_rank=256):
+        """Encode using split-key compact v3 by default.
 
-        v2 shares metadata, derives token ranges and omits empty streams. The
-        underlying nonempty entropy streams and numerical quantizers are unchanged.
+        v2 shares metadata, derives token ranges and omits empty streams. v3
+        additionally puts the leading key coefficients in an independently
+        readable entropy stream; selected-page decode still reconstructs the
+        identical complete code matrix. v1/v2 remain readable for comparisons.
         """
         page_tokens = operator.index(page_tokens)
         if page_tokens <= 0:
             raise ValueError('page_tokens must be positive')
-        if format_version not in (1, 2):
+        if format_version not in (1, 2, 3):
             raise ValueError('unsupported cold archive format_version')
+        key_head_rank = operator.index(key_head_rank)
+        if key_head_rank <= 0:
+            raise ValueError('key_head_rank must be positive')
         if codec.art is None:
             raise ValueError('calibrate the codec first')
         if keys.ndim != 2 or keys.shape != values.shape or keys.shape[1] != codec.art.p:
@@ -146,8 +155,9 @@ class ColdStore:
             page_codec.cfg = replace(cfg, sink_tokens=sink, window_tokens=window)
             payload = page_codec.compress(keys[start:end], values[start:end])
             pages.append((start, end, payload['key'].blob, payload['value'].blob))
-        if format_version == 2:
-            return cls(cls._pack_compact(codec, length, page_tokens, pages), codec)
+        if format_version in (2, 3):
+            return cls(cls._pack_compact(codec, length, page_tokens, pages,
+                                         format_version, key_head_rank), codec)
         metadata = json.dumps(dict(seq_len=length, p=p, page_tokens=page_tokens,
                                    entropy_codec=cfg.entropy_codec), separators=(',', ':')).encode()
         offset = _PREFIX.size + len(metadata) + len(pages) * _ENTRY.size
@@ -161,7 +171,7 @@ class ColdStore:
         return cls(blob, codec)
 
     @staticmethod
-    def _pack_compact(codec, length, page_tokens, pages):
+    def _pack_compact(codec, length, page_tokens, pages, format_version=2, key_head_rank=256):
         cfg, art = codec.cfg, codec.art
         shared = {}
         for name in ('key', 'value'):
@@ -170,14 +180,40 @@ class ColdStore:
                                 bits_per_token=assignment.bits_per_token)
         meta = dict(seq_len=length, p=art.p, page_tokens=page_tokens,
                     entropy_codec=cfg.entropy_codec, layout=cfg.layout,
+                    deflate_level=cfg.deflate_level,
                     sink=cfg.sink_tokens, window=cfg.window_tokens,
                     target_cr=cfg.target_cr, shared=shared)
+        if format_version == 3:
+            head_rank = min(key_head_rank, art.key.V.shape[1])
+            head_columns = sum(max(0, min(end, head_rank) - start)
+                               for start, end, quant in art.assignments['key'].blocks
+                               if quant != 'none' and start < head_rank)
+            meta.update(key_head_rank=head_rank, key_head_columns=head_columns)
         # This one shared metadata stream is decoded when opening the index.
         metadata = zlib.compress(json.dumps(meta, separators=(',', ':')).encode(), 6)
         bodies = []
         for _, _, key, value in pages:
             flags, streams = 0, []
-            for bit, blob in enumerate((key, value)):
+            if format_version == 3:
+                key_hdr, key_chunks = _split_payload(key)
+                widths = np.array(key_hdr['widths'], dtype=np.uint8)
+                raw = ser._decompress(key_chunks[0], cfg.entropy_codec)
+                codes = ser.unpack_codes(raw, key_hdr['n_compressed'], widths, key_hdr['layout'])
+                split = meta['key_head_columns']
+                head_raw = ser.pack_codes(codes[:, :split], widths[:split], key_hdr['layout'])
+                tail_raw = ser.pack_codes(codes[:, split:], widths[split:], key_hdr['layout'])
+                head = ser._compress(head_raw, cfg.entropy_codec, cfg.deflate_level) if head_raw else b''
+                tail = ser._compress(tail_raw, cfg.entropy_codec, cfg.deflate_level) if tail_raw else b''
+                flags |= int(key_hdr['prot_dtype'] == 'bf16')
+                if not key_hdr['n_compressed'] or not key_hdr['n_blocks']:
+                    key_chunks[1] = b''
+                if not key_hdr['n_protected']:
+                    key_chunks[2] = b''
+                streams.extend((head, tail, key_chunks[1], key_chunks[2]))
+                blobs = ((1, value),)
+            else:
+                blobs = enumerate((key, value))
+            for bit, blob in blobs:
                 hdr, chunks = _split_payload(blob)
                 flags |= int(hdr['prot_dtype'] == 'bf16') << bit
                 # Preserve every nonempty entropy stream byte for byte.
@@ -190,13 +226,14 @@ class ColdStore:
                 streams.extend(chunks)
             if any(len(c) >= 2**32 for c in streams):
                 raise ValueError('a page stream exceeds 4 GiB; reduce page_tokens')
-            bodies.append(_PAGE.pack(flags, *(len(c) for c in streams)) + b''.join(streams))
+            record = _PAGE_SPLIT if format_version == 3 else _PAGE
+            bodies.append(record.pack(flags, *(len(c) for c in streams)) + b''.join(streams))
         offset = _PREFIX.size + len(metadata) + (len(pages) + 1) * _OFFSET.size
         offsets = [offset]
         for body in bodies:
             offset += len(body)
             offsets.append(offset)
-        return b''.join([_PREFIX.pack(b'KVPG', 2, len(metadata), len(pages)), metadata,
+        return b''.join([_PREFIX.pack(b'KVPG', format_version, len(metadata), len(pages)), metadata,
                          *(_OFFSET.pack(o) for o in offsets), *bodies])
 
     def _page_payloads(self, page_id, which=None):
@@ -210,12 +247,14 @@ class ColdStore:
             if which in (None, 'value'):
                 payloads['value'] = Payload(self.blob[offset + nk:offset + nk + nv], {}, {})
             return payloads
-        flags, *sizes = _PAGE.unpack_from(self.blob, offset)
-        if flags & ~3 or _PAGE.size + sum(sizes) != nk:
+        record = _PAGE_SPLIT if self.format_version == 3 else _PAGE
+        flags, *sizes = record.unpack_from(self.blob, offset)
+        if flags & ~3 or record.size + sum(sizes) != nk:
             raise ValueError('invalid page record')
-        cursor, streams = offset + _PAGE.size, []
+        cursor, streams = offset + record.size, []
         for stream_id, size in enumerate(sizes):
-            needed = which is None or (stream_id < 3) == (which == 'key')
+            key_streams = 4 if self.format_version == 3 else 3
+            needed = which is None or (stream_id < key_streams) == (which == 'key')
             streams.append((self.blob[cursor:cursor + size] if size else self._empty_stream)
                            if needed else b'')
             cursor += size
@@ -227,14 +266,74 @@ class ColdStore:
             if which is not None and name != which:
                 continue
             shared = meta['shared'][name]
-            hdr = dict(shared, which=name, p=meta['p'], seq_len=end-start,
-                       n_compressed=n, n_protected=sink+window,
-                       n_blocks=sum(t != 'none' for _, _, t in shared['blocks']),
-                       widths=ser.widths_for(shared['blocks']).tolist() if n else [],
-                       sink=sink, window=window, layout=meta['layout'],
-                       target_cr=meta['target_cr'], prot_dtype='bf16' if flags & (1 << bit) else 'fp16')
-            payloads[name] = _legacy_payload(hdr, streams[bit*3:bit*3+3])
+            widths = ser.widths_for(shared['blocks']) if n else np.zeros(0, dtype=np.uint8)
+            hdr = self._payload_header(name, shared, end-start, n, sink, window,
+                                       widths, flags, bit)
+            if self.format_version == 3 and name == 'key':
+                split = meta['key_head_columns']
+                head_raw = ser._decompress(streams[0], meta['entropy_codec'])
+                tail_raw = ser._decompress(streams[1], meta['entropy_codec'])
+                head = ser.unpack_codes(head_raw, n, widths[:split], meta['layout'])
+                tail = ser.unpack_codes(tail_raw, n, widths[split:], meta['layout'])
+                codes = np.concatenate((head, tail), axis=1)
+                raw = ser.pack_codes(codes, widths, meta['layout'])
+                code_stream = ser._compress(raw, meta['entropy_codec'], meta.get('deflate_level', 6))
+                chunks = (code_stream, streams[2], streams[3])
+            else:
+                base = 4 if self.format_version == 3 else bit * 3
+                chunks = streams[base:base+3]
+            payloads[name] = _legacy_payload(hdr, chunks)
         return payloads
+
+    def _payload_header(self, name, shared, seq_len, n, sink, window, widths, flags, bit):
+        return dict(shared, which=name, p=self.metadata['p'], seq_len=seq_len,
+                    n_compressed=n, n_protected=sink+window,
+                    n_blocks=sum(t != 'none' for _, _, t in shared['blocks']),
+                    widths=widths.tolist(), sink=sink, window=window,
+                    layout=self.metadata['layout'], target_cr=self.metadata['target_cr'],
+                    prot_dtype='bf16' if flags & (1 << bit) else 'fp16')
+
+    def key_head_symbols(self, page_id, topk):
+        """Deserialize only the independently stored key head when available."""
+        topk = operator.index(topk)
+        if topk < 1:
+            raise ValueError('topk must be positive')
+        start, end, offset, nk, _ = self._entries[page_id]
+        if self.format_version != 3 or topk > self.metadata['key_head_rank']:
+            payload = self._page_payloads(page_id, 'key')['key']
+            decoded = ser.deserialize(payload.blob, codec=self.metadata['entropy_codec'])
+            if self.format_version == 1:
+                read = nk
+            else:
+                record = _PAGE_SPLIT if self.format_version == 3 else _PAGE
+                _, *sizes = record.unpack_from(self.blob, offset)
+                key_count = 4 if self.format_version == 3 else 3
+                read = record.size + sum(sizes[:key_count])
+            return (*decoded, read, 0)
+        flags, *sizes = _PAGE_SPLIT.unpack_from(self.blob, offset)
+        if flags & ~3 or _PAGE_SPLIT.size + sum(sizes) != nk:
+            raise ValueError('invalid page record')
+        stream_offsets, cursor = [], offset + _PAGE_SPLIT.size
+        for size in sizes:
+            stream_offsets.append(cursor)
+            cursor += size
+        # Deliberately do not slice the tail or value streams here. On a file-backed
+        # implementation these three reads map directly to independent range reads.
+        streams = tuple(self.blob[stream_offsets[i]:stream_offsets[i]+sizes[i]]
+                        if sizes[i] else self._empty_stream for i in (0, 2, 3))
+        meta = self.metadata
+        sink, window = _protection(meta['seq_len'], start, end, meta['sink'], meta['window'])
+        n = end - start - sink - window
+        shared = meta['shared']['key']
+        all_widths = ser.widths_for(shared['blocks']) if n else np.zeros(0, dtype=np.uint8)
+        head_columns = meta['key_head_columns']
+        widths = all_widths[:head_columns]
+        hdr = self._payload_header('key', shared, end-start, n, sink, window,
+                                   widths, flags, 0)
+        decoded = ser.deserialize(_legacy_payload(hdr, streams).blob,
+                                  codec=meta['entropy_codec'])
+        read = _PAGE_SPLIT.size + sizes[0] + sizes[2] + sizes[3]
+        return (*decoded, read, sizes[1])
 
     def storage_breakdown(self):
         """Stored byte counts; parsing this diagnostic does not decompress pages."""
@@ -250,11 +349,16 @@ class ColdStore:
                     for name, chunk in zip(('codes', 'scales_shifts', 'protected'), chunks):
                         out[name] += len(chunk)
         else:
-            out = dict(index=self.index_bytes, page_headers=0, page_framing=self.page_count * _PAGE.size,
+            record = _PAGE_SPLIT if self.format_version == 3 else _PAGE
+            out = dict(index=self.index_bytes, page_headers=0, page_framing=self.page_count * record.size,
                        codes=0, scales_shifts=0, protected=0)
             for _, _, offset, _, _ in self._entries:
-                _, *sizes = _PAGE.unpack_from(self.blob, offset)
-                for name, size in zip(('codes', 'scales_shifts', 'protected') * 2, sizes):
+                _, *sizes = record.unpack_from(self.blob, offset)
+                names = (('codes', 'codes', 'scales_shifts', 'protected',
+                          'codes', 'scales_shifts', 'protected')
+                         if self.format_version == 3 else
+                         ('codes', 'scales_shifts', 'protected') * 2)
+                for name, size in zip(names, sizes):
                     out[name] += size
         assert sum(out.values()) == self.nbytes()
         return out

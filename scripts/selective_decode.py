@@ -12,7 +12,7 @@ def main():
     torch.set_num_threads(2)
     rng = torch.Generator().manual_seed(31)
     cfg = KVTCConfig(target_cr=4, pca_rank_cap=16, block_sizes=(4, 16),
-                     sink_tokens=4, window_tokens=16, dp_calib_subsample=0)
+                     sink_tokens=4, window_tokens=16, dp_stride=1, dp_calib_subsample=0)
     codec = KVTCCodec(cfg, device='cpu')
     train = torch.randn(128, 16, generator=rng)
     codec.calibrate([train], [train * .7], verbose=False)

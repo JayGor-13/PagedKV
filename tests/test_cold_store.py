@@ -11,7 +11,7 @@ from kvtc import serialize
 @pytest.fixture(scope='module')
 def calibrated():
     cfg = KVTCConfig(target_cr=2, pca_rank_cap=8, block_sizes=(2, 4, 8),
-                     sink_tokens=2, window_tokens=3, dp_calib_subsample=0)
+                     sink_tokens=2, window_tokens=3, dp_stride=1, dp_calib_subsample=0)
     codec = KVTCCodec(cfg, device='cpu')
     train = torch.randn(48, 8, generator=torch.Generator().manual_seed(29))
     codec.calibrate([train], [train * .7], verbose=False)
@@ -20,7 +20,7 @@ def calibrated():
 
 @pytest.mark.parametrize('length', [0, 3, 7, 19])
 @pytest.mark.parametrize('entropy', ['identity', 'deflate'])
-@pytest.mark.parametrize('version', [1, 2])
+@pytest.mark.parametrize('version', [1, 2, 3])
 @pytest.mark.parametrize('layout', ['token_major', 'component_major'])
 def test_pages_match_original_codec_and_preserve_global_protection(calibrated, length, entropy, version, layout):
     codec = KVTCCodec(replace(calibrated.cfg, entropy_codec=entropy, layout=layout), device='cpu')
@@ -41,7 +41,7 @@ def test_pages_match_original_codec_and_preserve_global_protection(calibrated, l
     torch.testing.assert_close(full.keys[protected], x[protected].half().float(), rtol=0, atol=0)
 
 
-@pytest.mark.parametrize('version', [1, 2])
+@pytest.mark.parametrize('version', [1, 2, 3])
 def test_only_selected_pages_are_deserialized(calibrated, monkeypatch, version):
     x = torch.randn(19, 8, generator=torch.Generator().manual_seed(14))
     archive = ColdStore.encode(calibrated, x, x * .3, page_tokens=4, format_version=version)
@@ -110,15 +110,54 @@ def test_compact_format_preserves_legacy_streams_and_reconstruction(calibrated, 
 
 
 def test_compact_subset_does_not_decode_corrupt_unselected_page(calibrated):
-    from kvtc.cold_store import _PAGE
+    from kvtc.cold_store import _PAGE_SPLIT
     x = torch.randn(19, 8, generator=torch.Generator().manual_seed(19))
     archive = ColdStore.encode(calibrated, x, x, page_tokens=4)
     corrupted = bytearray(archive.blob)
     offset = archive._entries[2][2]
-    corrupted[offset + _PAGE.size] ^= 255  # Damage an unselected entropy stream.
+    corrupted[offset + _PAGE_SPLIT.size] ^= 255  # Damage an unselected entropy stream.
     reopened = ColdStore(bytes(corrupted), calibrated)
     actual = reopened.decode_pages([1])
     torch.testing.assert_close(actual.keys, archive.decode_pages([1]).keys, rtol=0, atol=0)
     import zlib
     with pytest.raises(zlib.error):
         reopened.decode_pages([2])
+
+
+@pytest.mark.parametrize('layout', ['token_major', 'component_major'])
+def test_split_key_head_scans_without_reading_tail_and_full_decode_is_exact(calibrated, layout):
+    from experiments.selector import scan_key_coefficients
+    from kvtc.cold_store import _PAGE_SPLIT
+
+    codec = KVTCCodec(replace(calibrated.cfg, entropy_codec='identity', layout=layout), device='cpu')
+    codec.art = calibrated.art
+    x = torch.randn(19, 8, generator=torch.Generator().manual_seed(23))
+    v2 = ColdStore.encode(codec, x, x * .3, page_tokens=8, format_version=2)
+    split = ColdStore.encode(codec, x, x * .3, page_tokens=8, format_version=3,
+                             key_head_rank=4)
+    expected, actual = v2.decode_all(), split.decode_all()
+    torch.testing.assert_close(actual.keys, expected.keys, rtol=0, atol=0)
+    torch.testing.assert_close(actual.values, expected.values, rtol=0, atol=0)
+
+    coefficients, stats = scan_key_coefficients(split, 4)
+    assert coefficients.shape == (len(x), 4)
+    assert stats['key_tail_payload_bytes_skipped'] > 0
+    assert stats['key_payload_bytes_available'] == (stats['key_scan_payload_bytes']
+                                                     + stats['key_tail_payload_bytes_skipped'])
+    assert 0 < stats['key_scan_payload_fraction'] < 1
+    full_key_bytes = 0
+    for _, _, offset, _, _ in split._entries:
+        _, *sizes = _PAGE_SPLIT.unpack_from(split.blob, offset)
+        full_key_bytes += _PAGE_SPLIT.size + sum(sizes[:4])
+    assert stats['key_scan_payload_bytes'] < full_key_bytes
+
+    # Corrupting a tail proves the selector never slices or decompresses it.
+    damaged = bytearray(split.blob)
+    offset = split._entries[1][2]
+    _, head_size, tail_size, *_ = _PAGE_SPLIT.unpack_from(split.blob, offset)
+    assert tail_size
+    damaged[offset + _PAGE_SPLIT.size + head_size] ^= 255
+    reopened = ColdStore(bytes(damaged), codec)
+    rescanned, damaged_stats = scan_key_coefficients(reopened, 4)
+    torch.testing.assert_close(rescanned, coefficients, rtol=0, atol=0)
+    assert damaged_stats == stats

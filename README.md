@@ -90,8 +90,8 @@ build for GPU measurements.
 Stages 1 and the CPU storage portion of stage 2 are implemented. The model adapter
 and stages 3/4's experiment runner are now implemented and checked on a tiny random
 model. Next run pretrained Qwen quality controls on the H200. The current selector
-scans all stored key streams and allocates a coefficient buffer; it is not yet the
-efficient GPU-only final system. Local grouped low-bit controls and timing telemetry
+reads the independently stored key-head stream and allocates a coefficient buffer;
+it is not yet the efficient GPU-only final system. Local grouped low-bit controls and timing telemetry
 are now present; official/validated packed baseline comparisons and isolated timing
 remain pending.
 
@@ -121,10 +121,13 @@ index entry. No changes were made to the existing codec for paging. GPU entropy
 decoding is not implemented; this prototype retains the codec's CPU serialization
 and CPU output tensors.
 
-The default compact v2 archive stores shared metadata once, uses 64-bit page
-offsets with implicit token ranges, and omits empty streams. The original v1
-format remains readable and can be encoded with `format_version=1` for comparisons.
-Nonempty entropy streams and reconstructed values are preserved. At decoding time,
+The default compact v3 archive stores shared metadata once, uses 64-bit page
+offsets with implicit token ranges, and splits each page's key codes into an
+independently readable leading coefficient stream (256 by default) and a tail.
+Scoring reads the head, key quantization metadata and protected keys; selected-page
+reconstruction reads both key streams and the value streams. No coefficient is
+duplicated. The v1 and v2 formats remain readable and can be encoded explicitly.
+Reconstructed values are preserved. At decoding time,
 the prototype rebuilds transient legacy headers for selected pages to reuse the
 existing numerical decoder; that allocation work has not been timed.
 

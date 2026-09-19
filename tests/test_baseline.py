@@ -58,9 +58,13 @@ def test_dp_reports_actual_error_and_matches_independent_enumeration():
 
 def test_skip_transition_does_not_introduce_unconfigured_quantized_blocks():
     x = torch.tensor([[1.234, 5.678, -1.234, -5.678]])
-    cfg = KVTCConfig(block_sizes=(2,), dp_calib_subsample=0)
+    cfg = KVTCConfig(block_sizes=(2,), dp_stride=1, dp_calib_subsample=0)
     result = assign_precision(x, 1000, cfg)
     assert all(t == 'none' or e - s in cfg.block_sizes for s, e, t in result.blocks)
+
+
+def test_production_dp_stride_defaults_to_sixteen():
+    assert KVTCConfig().dp_stride == 16
 
 
 def test_partial_stride_is_rejected_instead_of_mischarging_tail():

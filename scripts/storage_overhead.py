@@ -12,7 +12,7 @@ from kvtc.cold_store import ColdStore
 def fixture(features=16, length=1024, correlated=False, seed=31):
     rng = torch.Generator().manual_seed(seed)
     cfg = KVTCConfig(target_cr=4, pca_rank_cap=min(16, features), block_sizes=(4, 16),
-                     sink_tokens=4, window_tokens=16, dp_calib_subsample=0)
+                     sink_tokens=4, window_tokens=16, dp_stride=1, dp_calib_subsample=0)
     codec = KVTCCodec(cfg, device='cpu')
     if correlated:
         mapping = torch.randn(6, features, generator=rng)
@@ -98,7 +98,7 @@ def main():
     codec, k, v = fixture()
     mono = codec.compress(k, v)
     archive = ColdStore.encode(codec, k, v, page_tokens=128, format_version=1)
-    compact = ColdStore.encode(codec, k, v, page_tokens=128)
+    compact = ColdStore.encode(codec, k, v, page_tokens=128, format_version=2)
     result = dict(run_kind='synthetic_storage_ablation',
                   monolithic_bytes=sum(x.nbytes() for x in mono.values()),
                   monolithic_parts={name: sum(payload_parts(x.blob)[name] for x in mono.values())
@@ -113,10 +113,10 @@ def main():
             codec, k, v = fixture(features, length, correlated, seed)
         monolithic = codec.compress(k, v)
         mono_bytes = sum(p.nbytes() for p in monolithic.values())
-        compact_one_page = ColdStore.encode(codec, k, v, length).nbytes()
+        compact_one_page = ColdStore.encode(codec, k, v, length, format_version=2).nbytes()
         for page_tokens in (32, 64, 128, 256, 512):
             old = ColdStore.encode(codec, k, v, page_tokens, format_version=1)
-            new = ColdStore.encode(codec, k, v, page_tokens)
+            new = ColdStore.encode(codec, k, v, page_tokens, format_version=2)
             old_full, new_full = old.decode_all(), new.decode_all()
             torch.testing.assert_close(old_full.keys, new_full.keys, rtol=0, atol=0)
             torch.testing.assert_close(old_full.values, new_full.values, rtol=0, atol=0)

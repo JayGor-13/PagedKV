@@ -48,6 +48,13 @@ grouped low-bit controls, telemetry, resume and calibration checkpoints. The
 grouped quantization design follows the reviewed reference `exp_kivi_fair_long.py`
 but handles partial groups without padding and explicitly separates estimated
 packed size from actual reconstructed tensor residency. It is not official KIVI.
+
+On 2026-09-19 compact v3 split each page's key-code symbols into independently
+readable head and tail streams. The selector reads only the head, shared key
+quantization metadata and protected keys; selected-page recovery reads the tail
+and value streams. No coefficient or scale/shift metadata is duplicated. The
+default DP stride was raised from 1 to 16 after the supplied p=7168 measurement
+reported the same assignment with substantially lower calibration time.
 English QA F1 follows the normalization/overlap convention documented in
 https://github.com/THUDM/LongBench/blob/main/LongBench/metrics.py ; the implementation
 is independent and uses only standard-library operations. Dataset preparation reads

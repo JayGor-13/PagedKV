@@ -44,7 +44,7 @@ def sample(request):
     with torch.no_grad():
         train_layers, _ = A.prefill(model, torch.randint(0, 128, (96,)), chunk=32)
         train = A.to_features(model, train_layers)
-        codec = KVTCCodec(KVTCConfig(target_cr=2, pca_rank_cap=32, block_sizes=(4, 16),
+        codec = KVTCCodec(KVTCConfig(target_cr=2, pca_rank_cap=32, block_sizes=(4, 16), dp_stride=1,
                                      sink_tokens=2, window_tokens=4, dp_calib_subsample=0), device='cpu')
         codec.calibrate([train[0]], [train[1]], verbose=False)
         layers, _ = A.prefill(model, torch.randint(0, 128, (40,)), chunk=13)
@@ -143,16 +143,20 @@ def test_key_scan_reads_only_key_streams_and_matches_stored_quantization(sample,
     from kvtc.quant import quantize_block
     model, codec, archive, layers, k, v = sample
     calls = []
-    original = archive._page_payloads
+    original = archive.key_head_symbols
 
-    def track(page, which=None):
-        calls.append(which)
-        return original(page, which)
+    def track(page, topk):
+        calls.append((page, topk))
+        return original(page, topk)
 
-    monkeypatch.setattr(archive, '_page_payloads', track)
+    monkeypatch.setattr(archive, 'key_head_symbols', track)
+    monkeypatch.setattr(archive, '_page_payloads',
+                        lambda *args, **kwargs: pytest.fail('head scan reconstructed a full key payload'))
     coefficients, metrics = scan_key_coefficients(archive, 16)
-    assert calls == ['key'] * archive.page_count
+    assert calls == [(page, 16) for page in range(archive.page_count)]
     assert metrics['values_scanned'] is False
+    assert metrics['key_head_rank'] == 16
+    assert metrics['key_scan_payload_fraction'] == 1  # This tiny rank has no tail.
     basis = codec.art.key
     for page in range(archive.page_count):
         a, b = page*8, min(len(k), (page+1)*8)

@@ -275,7 +275,8 @@ def main():
         # Preserve protected entries even when the reference half-window split is smaller.
         hot_ids = hot_mask.nonzero().flatten()
         hot_layers = A.slice_layers(layers, hot_ids)
-        archive, compress_ms = measured(lambda: ColdStore.encode(codec, k, v, args.page),args.device)
+        archive, compress_ms = measured(
+            lambda: ColdStore.encode(codec, k, v, args.page, key_head_rank=args.topk), args.device)
         full, full_decode_ms = measured(archive.decode_all,args.device)  # Diagnostic only.
         full_layers = restore_kv_for_model(full.keys, full.values, model, device=args.device)
         monolithic = codec.compress(k, v)

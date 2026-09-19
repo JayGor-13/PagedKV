@@ -86,7 +86,7 @@ def test_paired_summary_refuses_missing_or_duplicate_controls():
 
 
 def test_calibration_checkpoint_identity_and_numerics(tmp_path):
-    cfg=KVTCConfig(pca_rank_cap=4,block_sizes=(1,4),target_cr=2)
+    cfg=KVTCConfig(pca_rank_cap=4,block_sizes=(1,4),target_cr=2,dp_stride=1)
     codec=KVTCCodec(cfg,device='cpu')
     x=torch.randn(20,4); codec.calibrate([x],[x],verbose=False)
     path=tmp_path/'basis.pt'; C.save(codec,path,'test')
