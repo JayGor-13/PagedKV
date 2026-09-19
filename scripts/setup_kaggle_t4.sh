@@ -3,14 +3,19 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 PYTHON="${PYTHON:-python3}"
-"$PYTHON" -c 'import sys; assert (3, 11) <= sys.version_info[:2] <= (3, 12), "Use Python 3.11 or 3.12"'
+"$PYTHON" -c 'import sys; assert (3, 11) <= sys.version_info[:2] <= (3, 13), "Use Python 3.11, 3.12, or 3.13"'
+if "$PYTHON" -c 'import sys; raise SystemExit(0 if sys.version_info[:2] >= (3, 13) else 1)'; then
+  NUMPY_SPEC='numpy==2.1.3'
+else
+  NUMPY_SPEC='numpy==1.26.4'
+fi
 "$PYTHON" -m pip install virtualenv
 for name in t4-baselines t4-ours; do
   "$PYTHON" -m virtualenv ".envs/$name"
   ".envs/$name/bin/python" -m pip install --upgrade pip wrapt
   ".envs/$name/bin/python" -m pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cu126
 done
-.envs/t4-baselines/bin/python -m pip install transformers==4.45.2 accelerate==0.34.2 datasets==2.21.0 huggingface-hub==0.25.2 numpy==1.26.4 scipy sentencepiece einops pytest
+.envs/t4-baselines/bin/python -m pip install transformers==4.45.2 accelerate==0.34.2 datasets==2.21.0 huggingface-hub==0.25.2 "$NUMPY_SPEC" scipy sentencepiece einops pytest
 .envs/t4-ours/bin/python -m pip install -r requirements-model.txt sentencepiece
 .envs/t4-baselines/bin/python -m scripts.fetch_baselines --methods freekv factory rocketkv
 mkdir -p outputs/t4-environment

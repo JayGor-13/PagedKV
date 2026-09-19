@@ -43,7 +43,7 @@ outputs still require the GPU smoke test. Every failed job stays visible.
 !nvidia-smi
 ```
 
-Use Python 3.11 or 3.12. Setup uses CUDA 12.6 PyTorch wheels and checks CUDA
+Use Python 3.11, 3.12, or 3.13. Setup uses CUDA 12.6 PyTorch wheels and checks CUDA
 availability; the notebook's driver must support them. Public Qwen models need
 no gated-model approval. Internet access is required for packages, upstream
 repositories, model weights and datasets. LongBench v2 also downloads a large
