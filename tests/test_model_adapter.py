@@ -10,6 +10,23 @@ from experiments import model_adapter as A
 from experiments.selector import scan_key_coefficients
 
 
+@pytest.mark.skipif(torch.cuda.device_count() < 2, reason='requires two CUDA devices')
+def test_rope_tables_return_to_requested_gpu_when_rotary_is_sharded():
+    from types import SimpleNamespace
+    from kvtc.rope import get_cos_sin
+
+    class RotaryOnSecondGpu:
+        def __call__(self, dummy, position_ids):
+            shape = (1, position_ids.shape[1], 8)
+            return (torch.ones(shape, device='cuda:1', dtype=torch.float64),
+                    torch.zeros(shape, device='cuda:1', dtype=torch.float64))
+
+    model = SimpleNamespace(model=SimpleNamespace(rotary_emb=RotaryOnSecondGpu()))
+    cos, sin = get_cos_sin(model, 16, 'cuda:0', torch.float32)
+    assert cos.device == torch.device('cuda:0') and sin.device == torch.device('cuda:0')
+    assert cos.dtype == torch.float32 and sin.dtype == torch.float32
+
+
 @pytest.fixture(scope='module', params=['qwen2', 'llama', 'llama3'])
 def sample(request):
     torch.manual_seed(42)

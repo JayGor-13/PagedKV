@@ -41,7 +41,11 @@ def get_cos_sin(model, seq_len, device, dtype=torch.float32, position_ids=None):
     rot = inner.rotary_emb
     dummy = torch.zeros(1, seq_len, 1, device=device, dtype=torch.float32)
     cos, sin = rot(dummy, position_ids)
-    return cos.unsqueeze(1).to(dtype), sin.unsqueeze(1).to(dtype)
+    # Accelerate can place the shared rotary module on a different GPU from the
+    # caller. Its hook then returns tables on that module's device, even though
+    # ``device`` names the GPU where the attention calculation will run.
+    return (cos.unsqueeze(1).to(device=device, dtype=dtype),
+            sin.unsqueeze(1).to(device=device, dtype=dtype))
 
 
 def roundtrip_error(model, seq_len=256, device="cuda"):
