@@ -1,4 +1,4 @@
-"""Resumable FP16/SDPA experiments on one or two Kaggle T4 GPUs.
+"""Resumable FP16/SDPA experiments on one or two notebook GPUs.
 
 Separate output schema and reports: never a reproduction of full H200 results.
 Each method runs in its own process/environment to isolate upstream patches.
@@ -23,6 +23,19 @@ MODELS = tuple(f'Qwen/Qwen2.5-{size}-Instruct' for size in ('0.5B', '1.5B', '3B'
     'meta-llama/Llama-3.1-8B-Instruct',)
 PROFILE = 'kaggle-t4-shortened-v1'
 DUAL_PROFILE = 'kaggle-t4-dual-v1'
+PORTABLE_LARGE_PROFILE = 'portable-single-gpu-large-v1'
+MIN_SINGLE_LARGE_GIB = 35
+
+
+def is_large_model(model):
+    return model.endswith(('7B-Instruct', '8B-Instruct'))
+
+
+def validate_gpu_capacity(models, gpus, memory_gib):
+    """Reject the known single-GPU FP16 layouts that cannot hold this harness."""
+    if gpus == 1 and any(is_large_model(model) for model in models) and memory_gib < MIN_SINGLE_LARGE_GIB:
+        raise RuntimeError(f'single-GPU 7B/8B FP16 runs require at least {MIN_SINGLE_LARGE_GIB} GiB; '
+                           f'assigned GPU has {memory_gib:.1f} GiB')
 
 
 def protocol(args):
@@ -34,9 +47,9 @@ def protocol(args):
         raise ValueError('Kaggle T4 mode supports one or two GPUs')
     if len(set(args.models)) != len(args.models) or len(set(args.methods)) != len(args.methods):
         raise ValueError('Duplicate models/methods')
-    if any(m.endswith(('7B-Instruct', '8B-Instruct')) for m in args.models) and args.gpus != 2:
-        raise ValueError('Qwen-7B and Llama-8B require --gpus 2 in this FP16 Kaggle runner')
-    return dict(profile=DUAL_PROFILE if args.gpus == 2 else PROFILE, models=args.models, methods=args.methods,
+    large_single = args.gpus == 1 and any(is_large_model(model) for model in args.models)
+    profile = PORTABLE_LARGE_PROFILE if large_single else DUAL_PROFILE if args.gpus == 2 else PROFILE
+    return dict(profile=profile, models=args.models, methods=args.methods,
                 benchmarks=args.benchmarks, samples=1 if args.smoke else args.samples,
                 selection='first' if args.smoke else args.selection,
                 prompt_cap=1024 if args.smoke else args.prompt_cap,
@@ -230,11 +243,13 @@ def worker(args):
     manifest = frozen['manifests'][args.manifest_index]
     method = args.method
     expected_version = '5.16.1' if method == 'ours' else '4.45.2'
-    if transformers.__version__ != expected_version or cfg['profile'] not in (PROFILE, DUAL_PROFILE) or method not in cfg['methods']:
+    if transformers.__version__ != expected_version or cfg['profile'] not in (PROFILE, DUAL_PROFILE, PORTABLE_LARGE_PROFILE) or method not in cfg['methods']:
         raise ValueError('Wrong worker environment or profile/method')
     gpus = cfg.get('gpus', 1)
     if torch.cuda.device_count() != gpus:
-        raise ValueError(f'T4 worker requires exactly {gpus} visible CUDA devices')
+        raise ValueError(f'worker requires exactly {gpus} visible CUDA devices')
+    total_gib = min(torch.cuda.get_device_properties(i).total_memory / 2**30 for i in range(gpus))
+    validate_gpu_capacity(cfg['models'], gpus, total_gib)
     from scripts.fetch_baselines import verify
     for name, info in frozen['upstream'].items():
         if verify(name) != info:
@@ -339,7 +354,7 @@ def main():
             return
         if args.action == 'repair-rocket':
             frozen = json.loads((args.out / 'inputs.json').read_text(encoding='utf-8'))
-            if frozen.get('config', {}).get('profile') not in (PROFILE, DUAL_PROFILE) or 'rocketkv' not in frozen['config']['methods']:
+            if frozen.get('config', {}).get('profile') not in (PROFILE, DUAL_PROFILE, PORTABLE_LARGE_PROFILE) or 'rocketkv' not in frozen['config']['methods']:
                 raise ValueError('This is not a compatible T4 output directory containing RocketKV')
             import torch
             if not torch.cuda.is_available():
@@ -404,7 +419,9 @@ def main():
         cfg = protocol(args)
         import torch
         if not torch.cuda.is_available() or torch.cuda.device_count() < args.gpus:
-            raise RuntimeError(f'Select a Kaggle accelerator with at least {args.gpus} GPUs')
+            raise RuntimeError(f'Select an accelerator with at least {args.gpus} GPUs')
+        total_gib = min(torch.cuda.get_device_properties(i).total_memory / 2**30 for i in range(args.gpus))
+        validate_gpu_capacity(args.models, args.gpus, total_gib)
         print(f'Sequential {args.gpus}-GPU jobs on:',
               ', '.join(torch.cuda.get_device_name(i) for i in range(args.gpus)), flush=True)
         frozen = prepare(args.out, cfg)

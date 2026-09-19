@@ -5,7 +5,8 @@ import pytest
 import torch
 
 from experiments.t4_attention import sdpa_attention
-from experiments.kaggle_t4 import PROFILE, method_config, protocol, select_rows, write_report, result_path
+from experiments.kaggle_t4 import (PORTABLE_LARGE_PROFILE, PROFILE, method_config, protocol,
+                                   select_rows, validate_gpu_capacity, write_report, result_path)
 from experiments.benchmark_state import atomic_json, digest
 
 
@@ -45,12 +46,15 @@ def test_t4_profile_limits_and_smoke():
         protocol(args)
 
 
-def test_t4_large_models_require_dual_gpu_profile():
+def test_large_models_use_portable_single_or_dual_gpu_profiles():
     args = Namespace(samples=100, prompt_cap=4096, max_new_tokens=128, smoke=False, gpus=1,
                      selection='stratified', context_capacity_pct=12.5,
                      models=['Qwen/Qwen2.5-7B-Instruct'], methods=['full'], benchmarks=['longbenchv2'])
-    with pytest.raises(ValueError, match='require --gpus 2'):
-        protocol(args)
+    cfg = protocol(args)
+    assert cfg['profile'] == PORTABLE_LARGE_PROFILE and cfg['gpus'] == 1
+    with pytest.raises(RuntimeError, match='at least 35 GiB'):
+        validate_gpu_capacity(args.models, 1, 24)
+    validate_gpu_capacity(args.models, 1, 40)
     args.gpus = 2
     cfg = protocol(args)
     assert cfg['profile'] == 'kaggle-t4-dual-v1' and cfg['gpus'] == 2 and cfg['samples'] == 100
