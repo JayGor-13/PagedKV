@@ -1,8 +1,28 @@
 #!/usr/bin/env bash
-# Run on the Linux H200 host, with a CUDA 12.4 toolkit and Python 3.10/3.11.
+# Run on the Linux H200 host, with a CUDA 12.4 toolkit and Python 3.10-3.12.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-PYTHON="${PYTHON:-python3.11}"
+if [[ -z "${PYTHON:-}" ]]; then
+  for candidate in python3.11 python3.12 python3.10 python3; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      version="$($candidate -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+      if [[ "$version" =~ ^3\.(10|11|12)$ ]]; then
+        PYTHON="$candidate"
+        break
+      fi
+    fi
+  done
+fi
+if [[ -z "${PYTHON:-}" ]] || ! command -v "$PYTHON" >/dev/null 2>&1; then
+  echo 'Python 3.10, 3.11, or 3.12 is required. Install one or run PYTHON=/absolute/path/to/python bash scripts/setup_phase_one.sh' >&2
+  exit 1
+fi
+PYTHON_VERSION="$($PYTHON -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+if [[ ! "$PYTHON_VERSION" =~ ^3\.(10|11|12)$ ]]; then
+  echo "Unsupported $PYTHON ($PYTHON_VERSION); use Python 3.10, 3.11, or 3.12." >&2
+  exit 1
+fi
+echo "Using $PYTHON ($($PYTHON --version 2>&1))"
 export TORCH_CUDA_ARCH_LIST="9.0"
 export MAX_JOBS="${MAX_JOBS:-8}"
 "$PYTHON" -m venv .envs/phase-baselines

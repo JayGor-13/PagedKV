@@ -25,14 +25,14 @@ resume checks source and environment identities.
 
 ## 2. Check the server and keep the terminal session alive
 
-The server needs Python 3.11 with `venv`, Git, C++ build tools, a CUDA 12.4 toolkit
+The server needs Python 3.10–3.12 with `venv`, Git, C++ build tools, a CUDA 12.4 toolkit
 for compiling FlashAttention, and an NVIDIA driver supporting CUDA 12.8 runtimes.
 If these are missing, have the server administrator provide them before setup.
 The CUDA version displayed by `nvidia-smi` is driver capability; `nvcc --version`
 reports the installed toolkit. They need not display the same version.
 
 ```bash
-python3.11 --version
+python3 --version
 git --version
 g++ --version
 nvcc --version
@@ -72,6 +72,10 @@ Do not launch independent runs on the same GPUs simultaneously.
 ```bash
 time bash scripts/setup_phase_one.sh 2>&1 | tee outputs/logs/setup.log
 ```
+
+Setup automatically selects Python 3.11, 3.12, 3.10, or a compatible `python3`,
+in that order. To select an interpreter explicitly, use
+`PYTHON=/absolute/path/to/python bash scripts/setup_phase_one.sh`.
 
 This installs `.envs/phase-baselines`, `.envs/phase-ours` and `.envs/phase-judge`,
 fetches the pinned upstream repositories, and records installed packages under

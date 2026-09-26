@@ -15,7 +15,7 @@ ShadowKV is not run in this phase. The complete matrix contains 64 generation jo
 
 ## 1. Install and authenticate
 
-Prerequisites: Python 3.11, Git, C++ build tools, a CUDA 12.4 toolkit (`nvcc`),
+Prerequisites: Python 3.10–3.12, Git, C++ build tools, a CUDA 12.4 toolkit (`nvcc`),
 and an NVIDIA driver compatible with CUDA 12.8 runtimes. Installation downloads
 dependencies; first execution downloads model weights and datasets. Allow several
 hundred GB of disk space. The current ours diagnostic path also needs substantial
