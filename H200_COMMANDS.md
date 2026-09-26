@@ -24,8 +24,8 @@ Use `tmux new -s pagedkv` before the long commands when running through SSH.
 ```bash
 time bash scripts/setup_phase_one.sh 2>&1 | tee outputs/logs/setup.log
 
-.envs/phase-baselines/bin/huggingface-cli login
-.envs/phase-baselines/bin/huggingface-cli whoami
+.envs/phase-baselines/bin/python -c "from huggingface_hub import login; login()"
+.envs/phase-baselines/bin/python -c "from huggingface_hub import whoami; print(whoami())"
 
 bash scripts/preflight_h200.sh --gpus 5 --online \
   --out outputs/h200-preflight.json \

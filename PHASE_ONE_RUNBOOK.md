@@ -28,7 +28,7 @@ they are not overwritten.
 
 ```bash
 bash scripts/setup_phase_one.sh
-.envs/phase-baselines/bin/huggingface-cli login
+.envs/phase-baselines/bin/python -c "from huggingface_hub import login; login()"
 nvidia-smi
 bash scripts/preflight_h200.sh --gpus 5 --online --out outputs/h200-preflight.json
 ```

@@ -89,8 +89,8 @@ The account must have access to `meta-llama/Llama-3.1-8B-Instruct` on Hugging Fa
 Accept the model's access terms using that account if needed, then:
 
 ```bash
-.envs/phase-baselines/bin/huggingface-cli login
-.envs/phase-baselines/bin/huggingface-cli whoami
+.envs/phase-baselines/bin/python -c "from huggingface_hub import login; login()"
+.envs/phase-baselines/bin/python -c "from huggingface_hub import whoami; print(whoami())"
 ```
 
 The environments share the account's standard Hugging Face cache. Model weights
