@@ -97,23 +97,42 @@ The environments share the account's standard Hugging Face cache. Model weights
 and datasets download on first use. Initial runs therefore include download time;
 subsequent runs generally reuse those files. Do not put access tokens in scripts.
 
-## 5. Run all local regression and adapter tests
+## 5. Run the fail-fast H200 preflight
+
+```bash
+bash scripts/preflight_h200.sh --gpus 5 --online \
+  --out outputs/h200-preflight.json
+```
+
+This performs a small BF16 matrix multiplication on every visible GPU and verifies
+the H200 model name, SM90 capability, at least 130 GiB per GPU, environment package
+versions, pinned upstream revisions, 350 GiB free disk, and authenticated access to
+all generation models plus the Qwen3 judge. Host RAM below 512 GiB is a warning
+because the 72B `ours` diagnostic path keeps substantial CPU state. Do not start a
+smoke run while any preflight item is `FAIL`. Archive `h200-preflight.json` with the
+results; it records the account name but never the Hugging Face token.
+
+If the server intentionally uses different capacity thresholds, pass the explicit
+`--minimum-gpu-memory-gib`, `--minimum-free-disk-gib`, or
+`--recommended-host-ram-gib` value and keep that command with the experiment log.
+
+## 6. Run all local regression and adapter tests
 
 ```bash
 time bash scripts/test_phase_one.sh 2>&1 | tee outputs/logs/tests.log
 ```
 
-The development-machine result was **115 main tests passed**, followed by
-**18 baseline adapter tests passed** in the separate environment. The first test
-invocation skips those 18 version-specific tests; the second invocation runs them.
-The script also verifies pinned upstream commits and source integrity.
+The script runs the main suite under Transformers 5.16.1, then runs the
+version-specific baseline adapter tests under Transformers 4.45.2. It also
+verifies pinned upstream commits and source integrity. Counts can grow as controls
+are added; require zero failures rather than comparing with an old hard-coded count.
 
 These tests check cache/position handling, adapter math, resumability, scoring,
 reporting and scheduling. Their baseline math tests replace CUDA attention with
 CPU SDPA. They do **not** replace the native GPU smoke tests below. If any test
 fails, inspect `outputs/logs/tests.log` and resolve it before a full run.
 
-## 6. Run a quick GPU smoke test
+## 7. Run a quick GPU smoke test
 
 Start with Qwen2.5-7B to check the installed CUDA stack and all eight methods:
 
@@ -128,7 +147,21 @@ This uses one selected GPU and a separate output directory. With `--smoke`, each
 benchmark uses two examples; LongBench v2's raw prompt cap is 4,096 tokens and
 generation is limited to eight tokens. Smoke accuracy is intentionally suppressed.
 
-## 7. Run the complete GPU smoke matrix
+## 8. Freeze and inspect the complete GPU smoke plan
+
+Create the frozen revisions, manifests, allocation and exact worker commands before
+launching all 64 jobs:
+
+```bash
+bash scripts/run_phase_one.sh --gpus 5 --smoke --plan-only --require-complete-plan \
+  --out outputs/phase-one-smoke
+```
+
+Inspect `outputs/phase-one-smoke/plan.json` and `comparison.md`. The plan must list
+64 executable jobs, with no `unsupported` rows. This step downloads tokenizers and
+datasets but does not load model weights or execute generation.
+
+## 9. Run the complete GPU smoke matrix
 
 This adds Llama, Qwen-14B and Qwen-72B, including multi-GPU execution where needed:
 
@@ -148,10 +181,21 @@ Passing this smoke run checks short-input execution only. It does not prove that
 120K prompts, 16K outputs, all dataset examples, or the separate judge will work.
 Native H200 execution has not yet been verified on the development machine.
 
-## 8. Run the full benchmark
+## 10. Freeze and inspect the production plan
 
 ```bash
-time bash scripts/run_phase_one.sh --gpus 5 \
+bash scripts/run_phase_one.sh --gpus 5 --plan-only --require-complete-plan \
+  --out outputs/phase-one
+```
+
+Confirm that `plan.json` contains the expected four models, two benchmarks and
+eight methods, with 64 executable jobs and no unsupported allocation. This freezes
+production revisions and tokens separately from the smoke directory.
+
+## 11. Run the full benchmark
+
+```bash
+time bash scripts/run_phase_one.sh --gpus 5 --require-complete-plan \
   --out outputs/phase-one \
   2>&1 | tee outputs/logs/full-run.log
 ```
@@ -170,7 +214,7 @@ For a different GPU allocation, change both `CUDA_VISIBLE_DEVICES` and `--gpus N
 Use `--gpu-memory-gib 130` only if deliberately choosing a lower planning limit;
 keep that setting consistent on resume.
 
-## 9. Monitor progress and resume
+## 12. Monitor progress and resume
 
 In another terminal, from the repository directory:
 
@@ -200,7 +244,7 @@ directory at a time, and its lock releases when the process terminates.
 If source, environment or per-job GPU layout changes, resume may refuse the old
 run. Use a new output directory for changed experiments rather than mixing results.
 
-## 10. Judge LongGenBench
+## 13. Judge LongGenBench
 
 Once generation has finished and its GPUs are free:
 
@@ -216,7 +260,7 @@ FreeKV's evaluation prompts and settings, and commits each completed check. Repe
 the command to resume. It skips incomplete generation jobs and smoke outputs.
 Generation completion alone does not validate the judge environment.
 
-## 11. Generate and inspect the final tables
+## 14. Generate and inspect the final tables
 
 ```bash
 .envs/phase-baselines/bin/python -m experiments.phase_one report \
@@ -236,7 +280,7 @@ judged accuracy is reported on a 0–1 scale. Empty judged accuracy means the ma
 judge stage is pending. Keep the complete output directory and environment locks
 with your results; these generated artifacts are excluded from Git tracking.
 
-## 12. How long will it take?
+## 15. How long will it take?
 
 **Plan for days to weeks for the complete matrix, not a few hours.** There is no
 measured H200 ETA yet. The current quality adapters run one sequence per worker;

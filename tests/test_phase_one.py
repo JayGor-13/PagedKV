@@ -4,7 +4,7 @@ import pytest
 import torch
 from experiments.benchmark_state import atomic_json, digest
 from experiments.freekv_protocol import settings, extract_answer, chat_ids, score_generation, judge_checks, sample_seed
-from experiments.phase_one import make_plan, write_report, execute
+from experiments.phase_one import make_plan, write_report, execute, require_complete_plan
 from experiments.phase_one_worker import sample
 
 
@@ -69,6 +69,24 @@ def test_72b_shards_without_silently_substituting_models(tmp_path):
     assert 'Qwen/device bridge' in plan['jobs'][2]['implementation']
     plan = make_plan([path], tmp_path, 1, 140, ['full'], tmp_path)
     assert plan['jobs'][0]['status'] == 'unsupported'
+
+
+def test_complete_plan_gate_rejects_unsupported_or_missing_cells(tmp_path):
+    first = make_manifest(tmp_path, model='Qwen/Qwen2.5-7B-Instruct')
+    longbench = tmp_path / 'longbench.json'
+    first.rename(longbench)
+    second = make_manifest(tmp_path, model='Qwen/Qwen2.5-7B-Instruct', bench='longgenbench')
+    longgen = tmp_path / 'longgen.json'
+    second.rename(longgen)
+    plan = make_plan([longbench, longgen], tmp_path, 1, 140, ['full', 'freekv'], tmp_path)
+    assert require_complete_plan(plan, ['Qwen/Qwen2.5-7B-Instruct'], ['full', 'freekv']) == 4
+    plan['jobs'][0]['argv'] = []
+    plan['jobs'][0]['reason'] = 'synthetic unavailable'
+    with pytest.raises(ValueError, match='non-executable'):
+        require_complete_plan(plan, ['Qwen/Qwen2.5-7B-Instruct'], ['full', 'freekv'])
+    plan['jobs'].pop()
+    with pytest.raises(ValueError, match='missing cells'):
+        require_complete_plan(plan, ['Qwen/Qwen2.5-7B-Instruct'], ['full', 'freekv'])
 
 
 def test_report_does_not_publish_partial_or_smoke_as_full_score(tmp_path):

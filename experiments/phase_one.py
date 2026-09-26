@@ -111,6 +111,28 @@ def make_plan(paths, out, gpus, memory, methods, env_root):
     return dict(schema='phase-one-plan-v1', gpus=gpus, memory_gib=memory, jobs=jobs)
 
 
+def require_complete_plan(plan, models, methods):
+    """Reject missing, duplicate, or unsupported cells in the requested matrix."""
+    expected = {(model, benchmark, method) for model in models
+                for benchmark in DEFAULTS['benchmarks'] for method in methods}
+    cells = [(j['model'], j['benchmark'], j['method']) for j in plan['jobs']]
+    actual = set(cells)
+    problems = []
+    if len(cells) != len(actual):
+        problems.append('duplicate job cells')
+    missing, extra = sorted(expected - actual), sorted(actual - expected)
+    if missing:
+        problems.append(f'missing cells: {missing}')
+    if extra:
+        problems.append(f'unexpected cells: {extra}')
+    unavailable = [f"{j['name']}: {j.get('reason') or j.get('status')}" for j in plan['jobs'] if not j['argv']]
+    if unavailable:
+        problems.append('non-executable jobs: ' + '; '.join(unavailable))
+    if problems:
+        raise ValueError('incomplete phase-one plan: ' + ' | '.join(problems))
+    return len(expected)
+
+
 def write_report(plan, out):
     rows = []
     for job in plan['jobs']:
@@ -210,6 +232,8 @@ def main():
     p.add_argument('--env-root', default='.envs')
     p.add_argument('--smoke', action='store_true')
     p.add_argument('--plan-only', action='store_true')
+    p.add_argument('--require-complete-plan', action='store_true',
+                   help='fail unless every requested model/benchmark/method cell is executable')
     args = p.parse_args()
     if args.gpus < 1:
         p.error('--gpus must be positive')
@@ -254,6 +278,9 @@ def main():
         atomic_json(plan_path, plan)
         write_report(plan, out)
         print(f'{len(plan["jobs"])} jobs, {sum(bool(j["argv"]) for j in plan["jobs"])} executable. See {plan_path}')
+        if args.require_complete_plan:
+            count = require_complete_plan(plan, args.models, args.methods)
+            print(f'Complete matrix verified: {count} executable jobs.', flush=True)
         if not args.plan_only and not execute(plan, out):
             raise SystemExit(1)
 

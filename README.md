@@ -17,8 +17,11 @@ experiments with Qwen2.5-0.5B/1.5B/3B, all eight methods, and per-example resume
 
 **Clone-to-results instructions:** [GETTING_STARTED_H200.md](GETTING_STARTED_H200.md)
 walks through cloning, installation, authentication, all tests, native GPU smoke
-tests, full execution, resume, judging and results. It also explains the runtime
+tests, a five-H200 BF16/environment/access preflight, frozen plan inspection, full execution, resume, judging and results. It also explains the runtime
 budget and how to refine it from actual H200 measurements.
+
+**Copy-paste command sheet:** [H200_COMMANDS.md](H200_COMMANDS.md) contains only
+the required clone-to-final-table commands for the five-H200 run.
 
 **Current four-model run:** [PHASE_ONE_RUNBOOK.md](PHASE_ONE_RUNBOOK.md) contains
 the mentor's Linux terminal commands for LongBench **v2** and FreeKV's LongGenBench,

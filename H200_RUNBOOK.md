@@ -69,7 +69,7 @@ Reuse that **same manifest path** when changing page size, selector or codec set
 
 - The output includes per-question generated token IDs/text, success using the reference's `target in output` rule, selected original positions, bytes decoded, active cache bytes, hot bytes, shared calibration bytes, and key-scan coefficient-buffer size.
 - `vanilla`, `monolithic_kvtc_full`, `paged_kvtc_full`, `hot_only`, `oracle`, `random`, and `scan` are evaluated on the same frozen documents.
-- `scan` ranks from stored quantized keys. It scans all key entropy streams, but reconstructs full K/V only for selected pages. It is not zero-cost retrieval and does not promise that only selected compressed bytes are ever read.
+- `scan` ranks from the independently stored leading key-coefficient stream. It reads the key head, quantization metadata and protected keys; key tails and value streams are decoded only for selected pages. Results record head bytes read, tail bytes skipped and the actual scan fraction. It is still a CPU entropy-decoding prototype rather than a final GPU retrieval kernel.
 - The archive uses CPU zlib; matrix operations can use the H200. This is not yet an entirely GPU-resident system.
 - Full diagnostic caches coexist in this quality harness. Do not use its process peak memory or runtime as per-method deployment measurements.
 - Local grouped K4/V2, K2/V2 and K4/V4 quality controls are now included. They reconstruct model-precision tensors; official packed KIVI and exact equal-memory budget matching remain pending. The reference's separate corrected KIVI file is partial (4/40 documents).

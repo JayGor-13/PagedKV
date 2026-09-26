@@ -30,6 +30,7 @@ they are not overwritten.
 bash scripts/setup_phase_one.sh
 .envs/phase-baselines/bin/huggingface-cli login
 nvidia-smi
+bash scripts/preflight_h200.sh --gpus 5 --online --out outputs/h200-preflight.json
 ```
 
 The HF account needs access to Meta's Llama model. Dependencies are isolated:
@@ -49,6 +50,10 @@ Then validate the real GPU execution path:
 ```bash
 bash scripts/run_phase_one.sh --gpus 5 --smoke --out outputs/phase-one-smoke
 ```
+
+Before that command, `--plan-only --require-complete-plan` freezes and validates
+the exact 64-job plan without loading model weights; it exits nonzero for any
+missing, duplicate or unsupported matrix cell.
 
 This checks all four models and all eight methods on two examples per benchmark,
 with a 4,096-token raw prompt cap and eight output tokens. It includes 72B model
