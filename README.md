@@ -26,7 +26,8 @@ the required clone-to-final-table commands for the five-H200 run.
 **CPU launch rehearsal:** run `python -m experiments.phase_one_cpu_rehearsal`
 to exercise the complete 64-job planner, scheduler, atomic checkpoint/resume, and
 report flow without models or a GPU. It intentionally produces no research score;
-the native H200 smoke remains required.
+the native H200 smoke remains required. [CPU_TESTING.md](CPU_TESTING.md) gives the
+clean-clone commands for all CPU regression and isolated baseline-adapter checks.
 
 **Current four-model run:** [PHASE_ONE_RUNBOOK.md](PHASE_ONE_RUNBOOK.md) contains
 the mentor's Linux terminal commands for LongBench **v2** and FreeKV's LongGenBench,

@@ -100,3 +100,4 @@ Disk (~467 GiB free) and host RAM (~2 TiB) passed the configured thresholds.
 9. Start production only if all 64 smoke rows are completed.
 
 Exact copy-paste commands are in `H200_COMMANDS.md`.
+The clean-clone CPU-only workflow is in `CPU_TESTING.md`.
