@@ -23,6 +23,26 @@ if [[ ! "$PYTHON_VERSION" =~ ^3\.(10|11|12)$ ]]; then
   exit 1
 fi
 echo "Using $PYTHON ($($PYTHON --version 2>&1))"
+if ! command -v nvcc >/dev/null 2>&1; then
+  echo 'nvcc is required to compile the pinned FlashAttention baseline. Load a CUDA 12.4 toolkit and rerun.' >&2
+  exit 1
+fi
+CUDA_TOOLKIT_VERSION="$(nvcc --version | sed -n 's/.*release \([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | tail -n 1)"
+if [[ ! "$CUDA_TOOLKIT_VERSION" =~ ^12\. ]]; then
+  cat >&2 <<EOF
+Unsupported active CUDA toolkit: ${CUDA_TOOLKIT_VERSION:-unknown}.
+The baseline environment pins PyTorch 2.5.1+cu124 and compiles FlashAttention 2.6.3,
+so nvcc must be CUDA 12.x. CUDA 12.4 is the reproducible target. A CUDA 13.1
+driver is fine, but do not compile this extension with the CUDA 13.1 toolkit.
+Load CUDA 12.4 (for example, module load cuda/12.4) or set CUDA_HOME and PATH to
+that toolkit, verify 'nvcc --version', then rerun this script.
+EOF
+  exit 1
+fi
+if [[ "$CUDA_TOOLKIT_VERSION" != "12.4" ]]; then
+  echo "WARNING: CUDA $CUDA_TOOLKIT_VERSION is active; CUDA 12.4 is the pinned/recommended toolkit." >&2
+fi
+echo "Using CUDA toolkit $CUDA_TOOLKIT_VERSION for native baseline extensions"
 export TORCH_CUDA_ARCH_LIST="9.0"
 export MAX_JOBS="${MAX_JOBS:-8}"
 "$PYTHON" -m venv .envs/phase-baselines

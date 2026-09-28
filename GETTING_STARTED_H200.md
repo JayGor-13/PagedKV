@@ -31,6 +31,24 @@ If these are missing, have the server administrator provide them before setup.
 The CUDA version displayed by `nvidia-smi` is driver capability; `nvcc --version`
 reports the installed toolkit. They need not display the same version.
 
+If `nvcc --version` reports 13.1, select CUDA 12.4 before setup. The current
+driver can remain installed. The baseline environment pins PyTorch `cu124` and
+compiles FlashAttention, so the setup script now rejects a CUDA 13.x compiler.
+
+```bash
+# Preferred on module-based clusters:
+module avail cuda
+module load cuda/12.4
+
+# Or, when that toolkit is installed at a conventional path:
+# export CUDA_HOME=/usr/local/cuda-12.4
+# export PATH="$CUDA_HOME/bin:$PATH"
+# export LD_LIBRARY_PATH="$CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
+
+hash -r
+nvcc --version
+```
+
 ```bash
 python3 --version
 git --version
@@ -87,6 +105,20 @@ Stop and resolve any setup error before proceeding. Setup completion confirms
 installation, not native model correctness. On a clean clone, run setup before
 the tests: some tests read the pinned upstream benchmark and evaluator files.
 
+You can test the complete launcher flow before setup, using only the selected
+Python interpreter and CPU. It simulates five scheduling slots and exercises all
+64 cells, an interrupted checkpoint, resume, and combined report generation:
+
+```bash
+python3 -m experiments.phase_one_cpu_rehearsal \
+  --out "outputs/cpu-rehearsal-$(git rev-parse --short HEAD)"
+cat "outputs/cpu-rehearsal-$(git rev-parse --short HEAD)/rehearsal-summary.json"
+```
+
+The rehearsal deliberately loads no model and publishes no score. It does not
+validate CUDA, FlashAttention, native baseline kernels, model sharding, quality,
+or latency. Those are covered only by the GPU smoke stage.
+
 ## 4. Log in to Hugging Face
 
 The account must have access to `meta-llama/Llama-3.1-8B-Instruct` on Hugging Face.
@@ -126,10 +158,12 @@ If the server intentionally uses different capacity thresholds, pass the explici
 time bash scripts/test_phase_one.sh 2>&1 | tee outputs/logs/tests.log
 ```
 
-The script runs the main suite under Transformers 5.16.1, then runs the
-version-specific baseline adapter tests under Transformers 4.45.2. It also
-verifies pinned upstream commits and source integrity. Counts can grow as controls
-are added; require zero failures rather than comparing with an old hard-coded count.
+The script runs the main suite under Transformers 5.16.1, then the version-specific
+baseline adapter tests under Transformers 4.45.2. It verifies pinned upstream
+commits, performs the synthetic codec round trip, runs the tiny random-weight model
+wiring/resume control, and executes the complete 64-job CPU orchestration rehearsal.
+Counts can grow as controls are added; require zero failures rather than comparing
+with an old hard-coded count.
 
 These tests check cache/position handling, adapter math, resumability, scoring,
 reporting and scheduling. Their baseline math tests replace CUDA attention with

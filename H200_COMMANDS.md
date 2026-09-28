@@ -17,6 +17,35 @@ set -o pipefail
 nvidia-smi
 ```
 
+Your server currently reports **CUDA toolkit 13.1** from `nvcc`. The pinned
+baseline compiles FlashAttention against PyTorch `cu124`, so first select a CUDA
+12.x toolkit; 12.4 is the reproducible target. Keep the current NVIDIA driver.
+
+```bash
+# Use the command supported by your server (ask the administrator if neither exists):
+module avail cuda
+module load cuda/12.4
+
+# Alternative when CUDA 12.4 is installed under /usr/local:
+# export CUDA_HOME=/usr/local/cuda-12.4
+# export PATH="$CUDA_HOME/bin:$PATH"
+# export LD_LIBRARY_PATH="$CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
+
+hash -r
+nvcc --version                 # must now say release 12.x; target 12.4
+```
+
+Before installing anything, the dependency-free CPU rehearsal can verify the
+64-cell plan, scheduling, checkpoint/resume, and report path:
+
+```bash
+python3 -m experiments.phase_one_cpu_rehearsal \
+  --out "outputs/cpu-rehearsal-$(git rev-parse --short HEAD)"
+cat "outputs/cpu-rehearsal-$(git rev-parse --short HEAD)/rehearsal-summary.json"
+```
+
+This does not load models or validate CUDA/native kernels, accuracy, or latency.
+
 Use `tmux new -s pagedkv` before the long commands when running through SSH.
 
 ## 2. Install, authenticate, and verify the machine

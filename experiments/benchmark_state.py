@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -20,7 +21,17 @@ def atomic_json(path, value):
         handle.write('\n')
         handle.flush()
         os.fsync(handle.fileno())
-    os.replace(temp, path)
+    # Windows scanners/indexers can briefly open a just-flushed file without
+    # delete sharing, making an otherwise atomic replace fail with WinError 5.
+    # Bound the retry so a persistent permissions problem still fails loudly.
+    for attempt in range(8):
+        try:
+            os.replace(temp, path)
+            break
+        except PermissionError:
+            if attempt == 7:
+                raise
+            time.sleep(.025 * (attempt + 1))
 
 
 def source_identity():

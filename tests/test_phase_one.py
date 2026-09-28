@@ -6,6 +6,7 @@ from experiments.benchmark_state import atomic_json, digest
 from experiments.freekv_protocol import settings, extract_answer, chat_ids, score_generation, judge_checks, sample_seed
 from experiments.phase_one import make_plan, write_report, execute, require_complete_plan
 from experiments.phase_one_worker import sample
+from experiments.phase_one_cpu_rehearsal import rehearse
 
 
 def test_freekv_protocol_scoring_and_sampling():
@@ -143,3 +144,29 @@ def test_stale_judge_cannot_be_merged(tmp_path):
     write_report(plan, tmp_path)
     row = json.loads((tmp_path/'comparison.json').read_text())[0]
     assert row['completion_rate'] == 75 and row['average_accuracy'] is None
+
+
+def test_cpu_rehearsal_executes_and_resumes_without_publishing_scores(tmp_path):
+    summary = rehearse(tmp_path / 'rehearsal',
+                       models=['Qwen/Qwen2.5-7B-Instruct'], methods=['full'], gpus=1)
+    assert summary['completed'] and summary['jobs'] == 2
+    rows = json.loads((tmp_path / 'rehearsal' / 'comparison.json').read_text())
+    assert len(rows) == 2
+    assert all(row['status'] == 'completed' and row['accuracy'] is None
+               and row['completion_rate'] is None for row in rows)
+
+
+def test_atomic_json_retries_transient_permission_error(tmp_path, monkeypatch):
+    import experiments.benchmark_state as state
+    real_replace = state.os.replace
+    attempts = []
+    def flaky_replace(source, destination):
+        attempts.append((source, destination))
+        if len(attempts) < 3:
+            raise PermissionError('temporary scanner lock')
+        real_replace(source, destination)
+    monkeypatch.setattr(state.os, 'replace', flaky_replace)
+    path = tmp_path / 'atomic.json'
+    atomic_json(path, {'ok': True})
+    assert json.loads(path.read_text()) == {'ok': True}
+    assert len(attempts) == 3

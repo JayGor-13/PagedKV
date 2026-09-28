@@ -1,4 +1,4 @@
-from scripts.h200_preflight import evaluate_gpu_inventory, evaluate_host_capacity
+from scripts.h200_preflight import evaluate_cuda_toolkit, evaluate_gpu_inventory, evaluate_host_capacity
 
 
 def statuses(checks):
@@ -20,3 +20,10 @@ def test_h200_inventory_requires_count_model_memory_capability_and_bf16():
 def test_host_capacity_blocks_disk_but_only_warns_for_ram():
     result = statuses(evaluate_host_capacity(200, 256, 350, 512))
     assert result == {'free_disk': 'fail', 'host_ram': 'warn'}
+
+
+def test_cuda_toolkit_rejects_cuda_13_and_marks_unpinned_cuda_12():
+    assert evaluate_cuda_toolkit('Cuda compilation tools, release 13.1, V13.1.80')['status'] == 'fail'
+    assert evaluate_cuda_toolkit('Cuda compilation tools, release 12.4, V12.4.131')['status'] == 'pass'
+    assert evaluate_cuda_toolkit('Cuda compilation tools, release 12.6, V12.6.20')['status'] == 'warn'
+    assert evaluate_cuda_toolkit('not nvcc output')['status'] == 'fail'

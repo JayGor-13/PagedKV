@@ -24,6 +24,21 @@ EXPECTED = {
 }
 
 
+def evaluate_cuda_toolkit(output, torch_cuda='12.4'):
+    """Check the toolkit used to compile the pinned native baseline extension."""
+    import re
+    match = re.search(r'release\s+(\d+)\.(\d+)', output)
+    if not match:
+        return check('cuda_toolkit', 'fail', 'could not parse nvcc --version')
+    active = '.'.join(match.groups())
+    if match.group(1) != torch_cuda.split('.')[0]:
+        return check('cuda_toolkit', 'fail',
+                     f'nvcc {active}; pinned baseline PyTorch uses CUDA {torch_cuda}. Load CUDA 12.4 before setup/preflight')
+    status = 'pass' if active == torch_cuda else 'warn'
+    return check('cuda_toolkit', status,
+                 f'nvcc {active}; pinned baseline PyTorch uses CUDA {torch_cuda}')
+
+
 def check(name, status, detail):
     if status not in ('pass', 'warn', 'fail'):
         raise ValueError('invalid check status')
@@ -73,7 +88,8 @@ def environment_versions(root):
         code = ("import importlib.metadata,json; "
                 f"print(json.dumps({{p:importlib.metadata.version(p) for p in {packages}}}))")
         try:
-            versions = json.loads(subprocess.check_output([str(python), '-c', code], text=True).strip())
+            versions = json.loads(subprocess.check_output(
+                [str(python), '-c', code], text=True, stderr=subprocess.STDOUT).strip())
             inventories[name] = {'python': str(python.resolve()), 'packages': versions}
             mismatches = {p: {'expected': v, 'actual': versions.get(p)} for p, v in expected.items()
                           if versions.get(p) != v}
@@ -179,9 +195,11 @@ def main():
             torch.cuda.synchronize(i)
             if not torch.isfinite(y).all().item():
                 raise RuntimeError(f'GPU {i} produced nonfinite BF16 preflight output')
+            with torch.cuda.device(i):
+                bf16_supported = bool(torch.cuda.is_bf16_supported())
             devices.append({'index': i, 'name': p.name, 'total_memory_gib': p.total_memory / 2**30,
                             'compute_capability': [p.major, p.minor],
-                            'bf16_supported': bool(torch.cuda.is_bf16_supported())})
+                            'bf16_supported': bf16_supported})
         checks.extend(evaluate_gpu_inventory(devices, args.gpus, args.minimum_gpu_memory_gib))
         selected = min(args.gpus, len(devices))
         missing_peer = [[i, j] for i in range(selected) for j in range(selected) if i != j
@@ -198,16 +216,20 @@ def main():
         try:
             output = subprocess.check_output(command, text=True, stderr=subprocess.STDOUT, timeout=30).strip()
             checks.append(check(name, 'pass', output[-2000:]))
+            if name == 'nvcc':
+                checks.append(evaluate_cuda_toolkit(output))
         except Exception as error:
             checks.append(check(name, 'fail', error))
 
     try:
         subprocess.run([str(ROOT / '.envs/phase-baselines/bin/python'), '-m', 'scripts.fetch_baselines',
                         '--methods', 'freekv', 'factory', 'rocketkv', '--verify-only'],
-                       cwd=ROOT, check=True, stdout=subprocess.DEVNULL)
+                       cwd=ROOT, check=True, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.PIPE, text=True)
         checks.append(check('upstream_revisions', 'pass', 'FreeKV, KVCache-Factory, and RocketKV match lock file'))
     except Exception as error:
-        checks.append(check('upstream_revisions', 'fail', error))
+        detail = getattr(error, 'stderr', None) or str(error)
+        checks.append(check('upstream_revisions', 'fail', str(detail)[-2000:]))
 
     access = None
     if args.online:

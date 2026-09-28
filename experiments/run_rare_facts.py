@@ -239,7 +239,7 @@ def main():
                       gpu=torch.cuda.get_device_name(0) if args.device == 'cuda' else None),
                   calibration=dict(signature=signature,status=calibration_status,ms=calibration_ms,config=asdict(codec.cfg)),
                   run_kind='quality_and_integration_controls', completed=False,
-                  warning='CPU zlib archive; scan selector reads every key stream; not GPU-only or byte-matched',
+                  warning='CPU zlib archive; selector reads split key heads and recalls selected tails; not GPU-only or byte-matched',
                   baseline_limitations='global approximate H2O/Snap; local grouped quantization, no packed low-bit kernels; no total-byte matching',
                   shared_calibration_resident_bytes=sum(t.numel()*t.element_size()
                       for b in (codec.art.key, codec.art.value) for t in (b.mu, b.V, b.evals)),
