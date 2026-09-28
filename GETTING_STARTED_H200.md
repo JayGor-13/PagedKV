@@ -133,6 +133,31 @@ The environments share the account's standard Hugging Face cache. Model weights
 and datasets download on first use. Initial runs therefore include download time;
 subsequent runs generally reuse those files. Do not put access tokens in scripts.
 
+Alternatively, set a read token in the shell using a hidden prompt:
+
+```bash
+read -r -s -p 'Hugging Face read token: ' HF_TOKEN
+echo
+export HF_TOKEN
+```
+
+Check actual Hub access, pretrained inference, and one real example from each
+benchmark on CPU before the GPU smoke. This also checks config-file access for
+all four requested H200 models, including gated Llama:
+
+```bash
+.envs/phase-baselines/bin/python -m scripts.real_hf_cpu_smoke \
+  --check-models meta-llama/Llama-3.1-8B-Instruct \
+    Qwen/Qwen2.5-7B-Instruct Qwen/Qwen2.5-14B-Instruct \
+    Qwen/Qwen2.5-72B-Instruct \
+  --out outputs/real-hf-cpu-smoke.json
+```
+
+This check uses Qwen2.5-0.5B-Instruct for a short CPU inference. The full H200
+smoke below loads each of the four requested models and runs all eight methods on
+real dataset examples. The production stage uses all 503 LongBench v2 and 400
+LongGenBench examples per model/method.
+
 ## 5. Run the fail-fast H200 preflight
 
 ```bash

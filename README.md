@@ -28,6 +28,8 @@ to exercise the complete 64-job planner, scheduler, atomic checkpoint/resume, an
 report flow without models or a GPU. It intentionally produces no research score;
 the native H200 smoke remains required. [CPU_TESTING.md](CPU_TESTING.md) gives the
 clean-clone commands for all CPU regression and isolated baseline-adapter checks.
+It also includes an authenticated pretrained Qwen smoke on real LongBench v2 and
+LongGenBench examples.
 
 **Current four-model run:** [PHASE_ONE_RUNBOOK.md](PHASE_ONE_RUNBOOK.md) contains
 the mentor's Linux terminal commands for LongBench **v2** and FreeKV's LongGenBench,

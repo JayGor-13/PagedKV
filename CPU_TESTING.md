@@ -29,7 +29,7 @@ combined report writer used by the H200 launcher.
 ```bash
 python3.12 -m venv .venv
 .venv/bin/python -m pip install --upgrade pip
-.venv/bin/python -m pip install -r requirements-cpu.txt -r requirements-model.txt sentencepiece
+.venv/bin/python -m pip install -r requirements-cpu.txt -r requirements-model.txt sentencepiece datasets
 ```
 
 Fetch the three pinned upstream repositories needed by parity and provenance
@@ -51,6 +51,36 @@ tests. This downloads source code, not model weights.
 The codec smoke uses synthetic tensors. The model integration uses a tiny random
 Qwen2 model created locally and tests all 14 wiring arms plus resume. Neither
 produces meaningful accuracy or performance numbers.
+
+To check a **pretrained** model on one real item from each requested dataset,
+authenticate with a Hugging Face read token. Enter it at the hidden terminal
+prompt; do not paste it into a notebook, command argument, log, or Git file:
+
+```bash
+read -r -s -p 'Hugging Face read token: ' HF_TOKEN
+echo
+export HF_TOKEN
+
+.venv/bin/python -m scripts.real_hf_cpu_smoke \
+  --model Qwen/Qwen2.5-0.5B-Instruct \
+  --out outputs/real-hf-cpu-smoke.json
+```
+
+This loads real Qwen weights and real LongBench v2/LongGenBench examples. It
+shortens both prompts to 512 tokens before chat formatting and generates four
+tokens per example, so it is a wiring check, not a quality score. The output
+records pinned model/dataset revisions and never records the token. To verify
+access to every requested H200 model at the same time, add the following flags
+before `--out`:
+
+```bash
+--check-models meta-llama/Llama-3.1-8B-Instruct \
+  Qwen/Qwen2.5-7B-Instruct Qwen/Qwen2.5-14B-Instruct \
+  Qwen/Qwen2.5-72B-Instruct
+```
+
+The Meta model requires approval for the account owning the token. If only a
+public local check is desired, pass `--anonymous` and omit `--check-models`.
 
 ## 4. Run the pinned Transformers 4.45 baseline adapter controls
 

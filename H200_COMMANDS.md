@@ -59,6 +59,17 @@ time bash scripts/setup_phase_one.sh 2>&1 | tee outputs/logs/setup.log
 .envs/phase-baselines/bin/python -c "from huggingface_hub import login; login()"
 .envs/phase-baselines/bin/python -c "from huggingface_hub import whoami; print(whoami())"
 
+# Alternatively, set a read token for this shell without placing it in history:
+# read -r -s -p 'Hugging Face read token: ' HF_TOKEN; echo; export HF_TOKEN
+
+# Real pretrained model + real dataset CPU check (one shortened example each):
+.envs/phase-baselines/bin/python -m scripts.real_hf_cpu_smoke \
+  --model Qwen/Qwen2.5-0.5B-Instruct \
+  --check-models meta-llama/Llama-3.1-8B-Instruct \
+    Qwen/Qwen2.5-7B-Instruct Qwen/Qwen2.5-14B-Instruct \
+    Qwen/Qwen2.5-72B-Instruct \
+  --out outputs/real-hf-cpu-smoke.json
+
 bash scripts/preflight_h200.sh --gpus 5 --online \
   --out outputs/h200-preflight.json \
   2>&1 | tee outputs/logs/preflight.log
